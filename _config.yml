@@ -41,6 +41,7 @@ plugins:
   - jekyll-feed
   - jekyll-spaceship
   - jekyll-toc
+  - jekyll-redirect-from
 
 toc:
   min_level: 1
