@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Rearchitecting Apache Pulsar to handle 100 million topics, Part 2"
-date:   2022-10-21 20:23:56 +0300
+date:   2022-10-24 18:28:00 +0300
 categories: pulsar
 toc: true
 ---
