@@ -36,6 +36,11 @@ Richard I. Cook passed away on August 31, 2022. RIP.
 
 * [Velocity Europe, John Allspaw, "Anticipation: What Could Possibly Go Wrong?"](https://www.youtube.com/watch?v=gy2lTFD4560)
 
+### More resources about Resilience engineering
+
+* [Resilience engineering papers](https://github.com/lorin/resilience-engineering)
+  * [Resilience engineering: Where do I start?](https://github.com/lorin/resilience-engineering/blob/master/intro.md)
+
 ### Applying "How Complex Systems Fail" to rearchitecting Apache Pulsar
 
 This is something that I'm working on. The design presented in ["Rearchitecting Apache Pulsar to handle 100 million topics, Part 1"]({% post_url 2022-10-21-possible-high-level-architecture %}) and ["Rearchitecting Apache Pulsar to handle 100 million topics, Part 2"]({% post_url 2022-10-24-rearchitecting-pulsar-part-2 %}) already contain many elements that are influenced by the principles of resilience engineering. Continuing to improve in this area is one of my goals.
