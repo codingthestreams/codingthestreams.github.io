@@ -4,6 +4,8 @@ title:  "Rearchitecting Apache Pulsar to handle 100 million topics, Part 4"
 date:   2022-11-29 09:52:13 +0200
 categories: pulsar
 toc: true
+lightbox: true
+lightbox_mermaid: true
 ---
 
 ## Context

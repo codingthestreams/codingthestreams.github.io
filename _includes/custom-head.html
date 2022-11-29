@@ -1,5 +1,28 @@
 {%- if page.lightbox %}
 <link rel="stylesheet" href="{{ "/assets/css/lightbox.min.css" | relative_url }}">
+<style>
+.lb-image, .lb-dataContainer {
+  width: 100% !important;
+  max-width: 100%;
+  height: auto !important;
+}
+.lb-outerContainer {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+}    
+</style>
 <script src="{{ "/assets/js/lightbox-plus-jquery.min.js" | relative_url }}"></script>
+{%- if page.lightbox_mermaid %}
+<script>
+$(function() {
+$('img.mermaid').each(function() {
+    $(this).wrap('<a href="' + $(this).attr('src') + '" data-lightbox="mermaid" />');
+});
+});
+lightbox.option({'fitImagesInViewport': false});
+</script>
+{%- endif %}
 {%- endif %}
 
