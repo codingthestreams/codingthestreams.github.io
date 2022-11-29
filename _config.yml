@@ -54,7 +54,12 @@ toc:
   item_class: toc-entry
   item_prefix: toc-
 
-
+jekyll-spaceship:
+  mermaid-processor:
+    syntax:
+      code: 'mermaid'
+    config:
+      theme: neutral
 
 # Exclude from processing.
 # The following items will not be processed, by default.
