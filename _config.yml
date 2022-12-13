@@ -28,6 +28,7 @@ baseurl: "" # the subpath of your site, e.g. /blog
 url: "https://codingthestreams.com" # the base hostname & protocol for your site, e.g. http://example.com
 twitter_username: lhotari
 github_username:  lhotari
+google_analytics: G-71LP6Z9K0H
 
 # Disqus Comments
 disqus:
