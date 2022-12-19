@@ -29,6 +29,8 @@ url: "https://codingthestreams.com" # the base hostname & protocol for your site
 twitter_username: lhotari
 github_username:  lhotari
 google_analytics: G-71LP6Z9K0H
+header_pages:
+  - about.markdown
 
 # Disqus Comments
 disqus:
@@ -43,6 +45,7 @@ plugins:
   - jekyll-spaceship
   - jekyll-toc
   - jekyll-redirect-from
+  - jekyll-archives
 
 toc:
   min_level: 1
@@ -61,6 +64,10 @@ jekyll-spaceship:
       code: 'mermaid'
     config:
       theme: neutral
+
+jekyll-archives:
+  enabled:
+    - categories
 
 # Exclude from processing.
 # The following items will not be processed, by default.

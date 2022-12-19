@@ -1,0 +1,9 @@
+<div class="categories-menu page-link">Categories
+<ul>
+  {% for category in site.categories %}
+    <li>
+      <a href="{{site.url}}/category/{{ category | first }}">{{ category | first }}</a>
+    </li>
+  {% endfor %}
+</ul>
+</div>
