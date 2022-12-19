@@ -24,6 +24,7 @@ layout: default
             {%- if forloop.last == false %}, {% endif -%}
         {% endfor %}
       {%- endif -%}</p>
+      Tags: {{ page | tags }}
   </header>
 
   <div class="post-content e-content" itemprop="articleBody">

@@ -32,6 +32,9 @@ google_analytics: G-71LP6Z9K0H
 header_pages:
   - about.markdown
 
+tag_page_layout: tag_page
+tag_page_dir: tag
+
 # Disqus Comments
 disqus:
     # Leave shortname blank to disable comments site-wide.
