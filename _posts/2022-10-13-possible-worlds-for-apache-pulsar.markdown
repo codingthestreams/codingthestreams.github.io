@@ -3,6 +3,7 @@ layout: post
 title:  "Possible worlds for Apache Pulsar 3.0 and making that actual"
 date:   2022-10-13 09:41:57 +0300
 categories: pulsar
+tags: pulsar-ng
 ---
 
 Hello all,

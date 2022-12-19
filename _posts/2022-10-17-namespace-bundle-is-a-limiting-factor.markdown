@@ -3,6 +3,7 @@ layout: post
 title:  "Pulsar's namespace bundle centric architecture limits future options"
 date:   2022-10-17 14:18:38 +0300
 categories: pulsar
+tags: pulsar-ng
 ---
 
 This blog post is a continuation of the previous blog post ["Pulsar's high

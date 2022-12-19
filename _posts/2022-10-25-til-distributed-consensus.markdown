@@ -3,6 +3,7 @@ layout: post
 title:  "TIL about Distributed Consensus and Systems design"
 date:   2022-10-25 15:50:12 +0300
 categories: til
+tags: availability
 ---
 
 ## Context

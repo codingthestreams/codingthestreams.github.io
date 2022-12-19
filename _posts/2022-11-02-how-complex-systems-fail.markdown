@@ -3,6 +3,7 @@ layout: post
 title:  "All your systems will become safety critical"
 date:   2022-11-02 11:45:48 +0200
 categories: til
+tags: availability
 ---
 
 

@@ -3,6 +3,7 @@ layout: post
 title:  "A critical view of Pulsar's Metadata store abstraction"
 date:   2022-10-18 15:57:14 +0300
 categories: pulsar
+tags: pulsar-ng
 ---
 
 This blog post is a continuation of the previous blog post ["Pulsar's namespace bundle centric architecture limits future options"]({% post_url

@@ -3,6 +3,7 @@ layout: post
 title:  "Correction: This blog is not about Apache Pulsar 3.0"
 date:   2022-10-14 08:15:00 +0300
 categories: pulsar
+tags: pulsar-ng
 ---
 
 There have been various discussions on the [Pulsar dev mailing list about plans

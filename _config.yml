@@ -46,6 +46,7 @@ plugins:
   - jekyll-toc
   - jekyll-redirect-from
   - jekyll-archives
+  - jekyll-tagging-related_posts
 
 toc:
   min_level: 1

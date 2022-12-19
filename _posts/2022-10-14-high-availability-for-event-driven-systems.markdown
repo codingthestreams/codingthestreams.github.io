@@ -3,6 +3,7 @@ layout: post
 title:  "How do you define high availability in your event driven system?"
 date:   2022-10-14 08:20:00 +0300
 categories: pulsar eventdriven
+tags: pulsar-ng availability
 ---
 
 I have worked with strict latency and availability requirements in the past. In

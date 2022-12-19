@@ -3,6 +3,7 @@ layout: post
 title:  "Pulsar's high availability promise and its blind spot"
 date:   2022-10-14 16:18:00 +0300
 categories: pulsar
+tags: pulsar-ng availability
 ---
 
 This blog post is a continuation of the previous blog post ["How do you define high availability in your event driven system?"]({% post_url 2022-10-14-high-availability-for-event-driven-systems %}). It is rare that Pulsar is completely down, but there are cases where there are short downtime for topics, if downtime is defined in the form of acceptable end-to-end latency or error rate. This blog post explains more details about the blind spots.

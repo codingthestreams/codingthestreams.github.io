@@ -3,6 +3,7 @@ layout: post
 title:  "Rearchitecting Apache Pulsar to handle 100 million topics, Part 3"
 date:   2022-11-28 17:31:07 +0200
 categories: pulsar
+tags: pulsar-ng
 toc: true
 ---
 
