@@ -141,7 +141,7 @@ However, there's more work to do until PIP-45 is stable.
 
 A model where all changes are broadcasted to all nodes in the cluster is
 problematic. This change was made in Pulsar 2.9.0 in [PR 11198, "Use ZK
-persistent watches"](https://github.com/apache/pulsar/pull/1119). The global
+persistent watches"](https://github.com/apache/pulsar/pull/11198). The global
 change event broadcasting design doesn't follow typical scalable design
 principles. This will pose limits on Pulsar clusters with large number of
 brokers and bookies. The current metadata change notification solution doesn't
