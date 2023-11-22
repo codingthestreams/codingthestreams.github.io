@@ -152,6 +152,8 @@ Benefits of using a token bucket-based implementation:
 
 Since the internals of Pulsar's rate limiting aren't currently exposed, it's possible to refactor the internals of Pulsar to work well with an asynchronous non-blocking rate limiter implementation. This is a necessity in order to solve problems like [[Bug] RateLimiter lock contention when use precise publish rate limiter #21442](https://github.com/apache/pulsar/issues/21442){:target="_blank"}.
 
+Additionally, the proposed solution includes adding a new option to Pulsar clients. This option would allow for the configuration of Pulsar producers and consumers to isolate the specified producer or consumer at the TCP/IP connection level. This would help mitigate potential multiplexing issues when necessary.
+
 #### Avoiding breaking changes
 
 The only external change for Pulsar users would be the addition of configuring the bursting behavior and absolute maximum rate for each rate limiter. The default values could be selected in a way that provides a good usage experience for most users. Most users wouldn't have to tune the bursting behavior.
