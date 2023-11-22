@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Possible worlds for Apache Pulsar 3.0 and making that actual | Coding the Streams - tech blog by Lari Hotari</title>
+<meta name="generator" content="Jekyll v3.9.2">
+<meta property="og:title" content="Possible worlds for Apache Pulsar 3.0 and making that actual">
+<meta property="og:locale" content="en_US">
+<meta name="description" content="Hello all,">
+<meta property="og:description" content="Hello all,">
+<link rel="canonical" href="https://codingthestreams.com/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html">
+<meta property="og:url" content="https://codingthestreams.com/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html">
+<meta property="og:site_name" content="Coding the Streams - tech blog by Lari Hotari">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2022-10-13T06:41:57+00:00">
+<meta name="twitter:card" content="summary">
+<meta property="twitter:title" content="Possible worlds for Apache Pulsar 3.0 and making that actual">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2022-10-13T06:41:57+00:00","datePublished":"2022-10-13T06:41:57+00:00","description":"Hello all,","headline":"Possible worlds for Apache Pulsar 3.0 and making that actual","mainEntityOfPage":{"@type":"WebPage","@id":"https://codingthestreams.com/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html"},"url":"https://codingthestreams.com/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css">
+<link type="application/atom+xml" rel="alternate" href="https://codingthestreams.com/feed.xml" title="Coding the Streams - tech blog by Lari Hotari">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-71LP6Z9K0H"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-71LP6Z9K0H');
+</script>
+  
+
+
+</head>
+<body>
+<header class="site-header" role="banner">
+
+  <div class="wrapper">
+<a class="site-title" rel="author" href="/">Coding the Streams - tech blog by Lari Hotari</a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger">
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewbox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"></path>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+<a class="page-link" href="/about/">About</a><div class="categories-menu page-link">Categories
+<ul>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/pulsar">pulsar</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/eventdriven">eventdriven</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/til">til</a>
+    </li>
+  
+</ul>
+</div>
+<div class="categories-menu page-link">Tags
+<ul>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-ng">pulsar-ng</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/availability">availability</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-dev">pulsar-dev</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/slo">slo</a>
+      </li>
+    
+</ul>
+</div>
+
+        </div>
+      </nav>
+</div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Possible worlds for Apache Pulsar 3.0 and making that actual</h1>
+    <p class="post-meta"><time class="dt-published" datetime="2022-10-13T06:41:57+00:00" itemprop="datePublished">
+        Oct 13, 2022
+      </time></p>
+      Tags: <a href="/tag/pulsar-ng.html" rel="tag">pulsar-ng</a>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <p>Hello all,</p>
+
+<p>This is a blog dedicated to sharing learnings, thoughts and experiments
+about Apache Pulsar development and future improvements. The opinions
+are my own and do not represent the views of my employer DataStax or
+Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+
+<p>The content is targeted for everyone who would like to participate in
+Apache Pulsar 3.0 planning discussions and development.</p>
+
+<p>As <a href="https://en.wikipedia.org/wiki/Jerome_Bruner">Jerome Bruner (1915-2016)</a> has said <a href="https://www.youtube.com/watch?v=aljvAuXqhds">in an
+interview in 2014</a> when he was 99-years old:</p>
+
+<blockquote>
+  <p>The main thing about teaching is that it opens up a wider range of possibility, what’s possible.</p>
+
+  <p>You teach them about something in the past or in the presence, but you hope that your teaching will have the good effect
+of leading them into the world of possibility, that’s where intelligence lies.</p>
+
+  <p>Teaching is about speculating about possibility. Particularly, in the western world, we like people to 
+stick to the factual. To what goes now. I’d say the main object of teaching and educating is get them to think and 
+share their notions about where this leads.<br>
+To go beyond the information given.</p>
+
+  <p>If it’s only about the past, it gets you nowhere, only back to the past.<br>
+It is about back and forth between the possible and the actual and learning how to make that leap.</p>
+
+  <p>Not only learning how, but learning what is necessary to do it. To use your bean. To its fullest extent.</p>
+</blockquote>
+
+<p>I hope that this blog will be teaching you and me to go beyond the information given.
+The articles shared in this blog will open up a wider range of possibility for Apache Pulsar. Me and other blog 
+authors will be speculating about what is possible. Our focus is in the future. As Jerome Bruner
+said, “If it’s only about the past, it gets you nowhere, only back to the past.”.</p>
+
+<p>My first goal is to teach you about the possible worlds for Apache Pulsar and how
+that could be made actual. This will include details of how the current architecture
+could be revisited to help Pulsar improve the capabilities of unified streaming and messaging.</p>
+
+<p>Instead of adding new features to Pulsar, my passion is to improve the
+quality features of Pulsar, improving reliability and resilience over
+all and also focusing on improving efficiency and scalability of Pulsar.</p>
+
+<p>Reliability is about delivering consistent quality over time. Apache
+Pulsar is a highly available, distributed messaging system that provides
+guarantees of no message loss and strong message ordering with
+predictable read and write latency.</p>
+
+<p>There are some blind spots in the current solution which must be tackled
+to make progress on improving Pulsar’s reliability. Adding band-aid won’t be sufficient. Quick fixes and kludges add more accidental
+complexity. Future blog posts will uncover more details about the
+possibilities for improving and how this can be accomplished.</p>
+
+<p>The content of the blog posts could be referenced in Apache Pulsar 3.0 planning
+and eventually I have plans to extract actual Pulsar Improvement Proposals (PIP)
+based on the blog posts and feedback discussions that take place in this blog. I’d like to remind you that all decisions for Apache Pulsar project’s future are made on the Apache Pulsar dev mailing list.</p>
+
+<p>I’m looking forward to everyone’s participation in the Apache Pulsar 3.0
+planning discussions on the Apache Pulsar <a href="mailto:dev@pulsar.apache.org">dev mailing
+list</a>
+(<a href="mailto:dev-subscribe@pulsar.apache.org">[subscribe]</a>
+<a href="https://lists.apache.org/list.html?dev@pulsar.apache.org">[archive]</a>).</p>
+
+<p>Some related threads:</p>
+<ul>
+  <li><a href="https://lists.apache.org/thread/tvco1orf0hsyt59pjtfbwoq0vf6hfrcj">Pulsar 3.0 brainstorming: Going beyond PIP-45 Pluggable metadata
+interface</a></li>
+  <li><a href="https://lists.apache.org/thread/roohoc9h2gthvmd7t81do4hfjs2gphpk">The current design of namespace bundles is becoming a limitation for
+future Pulsar
+improvements</a></li>
+  <li><a href="https://lists.apache.org/thread/vrr75rrh4trqlp14objh3snlfvmzdrp2">Pulsar 3.0 - dreaming of the ability to rename
+objects</a></li>
+  <li><a href="https://lists.apache.org/thread/v7xy57qfzbhopoqbm75s6ng8xlhbr2q6">Back pressure in Apache
+Pulsar</a></li>
+  <li><a href="https://github.com/apache/pulsar/issues/12555#issuecomment-955748744">Long list of Metadata inconsistency
+issues</a></li>
+</ul>
+
+<p>This is the most recent thread: <a href="https://lists.apache.org/thread/1bofpck07fgnv118s2z9qtpz7tvd8fg9">Planning for Apache Pulsar
+3.0</a>.</p>
+
+<blockquote>
+  <p>Use your bean, to its fullest extent.
+— <cite>Jerome Bruner</cite></p>
+</blockquote>
+
+<p>Best Regards,</p>
+
+<p>Lari Hotari</p>
+
+  </div>
+
+  
+  <div>
+    <h3>Related Posts</h3>
+    <ul>
+    
+      <li><a href="/pulsar/2023/03/02/scalable-distributed-system-principles.html">Scalable distributed system principles in the context of redesigning Apache Pulsar's metadata solution</a></li>
+    
+      <li><a href="/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 4</a></li>
+    
+      <li><a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 3</a></li>
+    
+      <li><a href="/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 2</a></li>
+    
+      <li><a href="/pulsar/2022/10/21/possible-high-level-architecture.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 1</a></li>
+    
+      <li><a href="/pulsar/2022/10/18/view-of-pulsar-metadata-store.html">A critical view of Pulsar's Metadata store abstraction</a></li>
+    
+      <li><a href="/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">Pulsar's namespace bundle centric architecture limits future options</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/pulsars-promise.html">Pulsar's high availability promise and its blind spot</a></li>
+    
+      <li><a href="/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html">How do you define high availability in your event driven system?</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/not-about-pulsar-3-0.html">Correction: This blog is not about Apache Pulsar 3.0</a></li>
+    
+    </ul>
+  </div>
+  <div id="disqus_thread"></div>
+  <script>
+    var disqus_config = function () {
+      this.page.url = 'https://codingthestreams.com/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html';
+      this.page.identifier = 'https://codingthestreams.com/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html';
+    };
+
+    (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = 'https://codingthestreams.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+    })();
+  </script>
+  <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a>
+</noscript>
+<a class="u-url" href="/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Coding the Streams - tech blog by Lari Hotari</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">Coding the Streams - tech blog by Lari Hotari</li>
+<li><a class="u-email" href="mailto:lhotari@apache.org">lhotari@apache.org</a></li>
+</ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+<ul class="social-media-list">
+<li><a href="https://github.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">lhotari</span></a></li>
+<li><a href="https://www.twitter.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">lhotari</span></a></li>
+</ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>

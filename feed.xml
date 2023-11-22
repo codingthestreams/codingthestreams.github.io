@@ -1,0 +1,1482 @@
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" ><generator uri="https://jekyllrb.com/" version="3.9.2">Jekyll</generator><link href="https://codingthestreams.com/feed.xml" rel="self" type="application/atom+xml" /><link href="https://codingthestreams.com/" rel="alternate" type="text/html" /><updated>2023-11-22T17:31:43+00:00</updated><id>https://codingthestreams.com/feed.xml</id><title type="html">Coding the Streams - tech blog by Lari Hotari</title><subtitle>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</subtitle><entry><title type="html">Apache Pulsar service level objectives and rate limiting</title><link href="https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html" rel="alternate" type="text/html" title="Apache Pulsar service level objectives and rate limiting" /><published>2023-11-22T14:37:10+00:00</published><updated>2023-11-22T14:37:10+00:00</updated><id>https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting</id><content type="html" xml:base="https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html">&lt;h2 id=&quot;context&quot;&gt;Context&lt;/h2&gt;
+
+&lt;p&gt;This blog post is based on the discussion about improving Apache Pulsar’s rate limiting. The discussion was initiated by a Pulsar Improvement Proposal (PIP) titled “PIP-310: Support Custom Publish Rate Limiters”. The detailed email discussion can be found on the &lt;a href=&quot;https://www.mail-archive.com/search?l=dev@pulsar.apache.org&amp;amp;q=subject:%22%5C%5BDISCUSS%5C%5D+PIP%5C-310%5C%3A+Support+custom+publish+rate+limiters%22&amp;amp;o=oldest&amp;amp;f=1&quot; target=&quot;_blank&quot;&gt;Pulsar dev mailing list&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;I wrote this blog post to summarize my viewpoints expressed in this discussion and to provide more context around rate limiting in Pulsar. The PIP has a limited scope of “publish rate limiters”. I believe it’s necessary to take a holistic view and examine the purpose of rate limiters and message throttling in Pulsar.&lt;/p&gt;
+
+&lt;h2 id=&quot;delivering-improvements-in-apache-pulsar-for-messaging-as-a-service-platform-teams&quot;&gt;Delivering Improvements in Apache Pulsar for Messaging-as-a-Service Platform Teams&lt;/h2&gt;
+
+&lt;p&gt;While visiting the &lt;a href=&quot;https://pulsar-summit.org/event/north-america-2023&quot; target=&quot;_blank&quot;&gt;Pulsar Summit North America 2023 in San Francisco&lt;/a&gt; last month, I observed a very positive trend: an increasing number of messaging-as-a-service platform teams are adopting Apache Pulsar as their main building block for providing messaging services across their organizations.
+For example, in one of the keynote talks, “A Journey to Deploy Pulsar on Cisco’s Cloud Native IoT Platform,” &lt;a href=&quot;https://www.youtube.com/watch?app=desktop&amp;amp;v=YGImIkY6ymo&amp;amp;t=43m30s&quot; target=&quot;_blank&quot;&gt;Sr. Director Chandra Ganguly explains how they are migrating to use Pulsar in Cisco’s IoT platform that serves over 245M devices, including over 84M connected cars&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;https://www.youtube.com/embed/YGImIkY6ymo?start=2610&quot; alt=&quot;&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;This is clear validation that the value of Apache Pulsar’s truly multi-tenant architecture is delivering results, making Apache Pulsar a cost-efficient and reliable solution for messaging-as-a-service platform teams in very demanding application environments.&lt;/p&gt;
+
+&lt;p&gt;In the Apache Pulsar project, we are committed to delivering further improvements to the existing multi-tenancy features. One area of improvement is the service level management and capacity management of a large Pulsar system. This is also a key concern of messaging-as-a-service platform teams.&lt;/p&gt;
+
+&lt;p&gt;This blog post focuses on rate limiting and throttling in Apache Pulsar and delivering improvements to that. The proposed improvements are prerequisites for expanding the work to cover broader aspects in delivering improvements for messaging-as-a-service platform teams that rely on OSS Apache Pulsar.&lt;/p&gt;
+
+&lt;h2 id=&quot;why-do-we-need-rate-limiting-in-pulsar&quot;&gt;Why Do We Need Rate Limiting in Pulsar?&lt;/h2&gt;
+
+&lt;p&gt;When operating a multi-tenant platform service, it’s necessary to define and provide a specific level of service to the system’s users (see &lt;a href=&quot;https://sre.google/sre-book/service-level-objectives/&quot; target=&quot;_blank&quot;&gt;Google SRE book’s SLO chapter&lt;/a&gt; for more details). The primary reason for implementing rate limiting in Pulsar is to manage the service level and system capacity.&lt;/p&gt;
+
+&lt;p&gt;Defining explicit Service Level Objectives (SLOs) allows service providers to set proper performance expectations for consumers in a multi-tenant system like Apache Pulsar. Without clearly communicated targets, clients may develop unrealistic assumptions about latency, throughput, and reliability.&lt;/p&gt;
+
+&lt;p&gt;For example, in an empty Pulsar cluster with ample idle resources, end-to-end latency is extremely low. Clients could come to depend on this undefined “peak performance” as the expected service level. However, as more tenants and traffic utilize the system, resource contention increases queues and latency.&lt;/p&gt;
+
+&lt;p&gt;Suddenly, previously functional applications might begin failing catastrophically when backpressured if the applications are needlessly dependent on very low latency and high throughput where backpressure hasn’t been applied. One concrete example of this is an application that uses Pulsar producer’s asynchronous sending but lacks proper logic to handle errors in sending. When the application is backpressured, it’s possible that the send queue fills up on the client side, and in the case of asynchronous sending with non-blocking behavior (Pulsar Java client: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;blockIfQueueFull&lt;/code&gt; option with the default value of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;false&lt;/code&gt;; Pulsar Go client: &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DisableBlockIfQueueFull: true&lt;/code&gt;), that results in the message not being sent and instead reported as failed asynchronously. It’s possible that the application developer forgets to handle this type of errors, since they are rare. When this eventually happens, it might lead to application developers filing tickets where this type of behavior is reported as a message loss by the Pulsar messaging service, although the problem is in the application that isn’t resilient to failures or degraded performance. When rate limiting is applied, it is more likely that such applications would fail already during testing and the problem would be resolved before it causes issues in production where the messaging-as-a-service platform team is blamed. (Besides this, there is a need to make application developer’s life easier so that such details in developing messaging applications would be properly covered in Pulsar documentation and code samples. Currently you learn such details by experience which means making a lot of mistakes and dealing with the consequences. :smile:)&lt;/p&gt;
+
+&lt;p&gt;Rate limiting constrains tenant usage to specified quotas, enabling accurate planning and over-commitment of resources. This helps to achieve cost optimizations in operating the service across multiple tenants.&lt;/p&gt;
+
+&lt;p&gt;When no SLOs are defined, a certain service level becomes the implicit service level. Tenants might perceive degradation in service performance in very different ways than the service providers. The dilemma is that the service provider hasn’t committed to the service level that the tenant is expecting, leading to many unnecessary conflicts.&lt;/p&gt;
+
+&lt;p&gt;Rate limiting is the first step in Pulsar for managing consumer expectations and preventing unrealistic reliance on peak performance.&lt;/p&gt;
+
+&lt;h3 id=&quot;the-problem-of-exceeding-service-level-expectations&quot;&gt;The Problem of Exceeding Service Level Expectations&lt;/h3&gt;
+
+&lt;p&gt;There’s a good example in the &lt;a href=&quot;https://sre.google/sre-book/service-level-objectives/&quot; target=&quot;_blank&quot;&gt;SRE book&lt;/a&gt; about Google’s Chubby lock service. The high availability of Chubby led some teams to add unreasonable dependencies, assuming it would never fail. However, when service degradations occurred, despite their rarity, dependent services were impacted.&lt;/p&gt;
+
+&lt;p&gt;To address this, the Chubby SRE team ensured that availability met, but did not significantly exceed, the SLO target. If no natural outages occurred in a quarter to anchor expectations, the team would deliberately take the system down. This approach forced service owners to handle Chubby unavailability, preventing an unrealistic reliance on its availability.&lt;/p&gt;
+
+&lt;p&gt;Explicit SLOs allow providers to properly set consumer expectations. Meeting, but not dramatically exceeding, SLOs, along with controlled failures, helps avoid dependencies that assume a level of reliability not guaranteed.&lt;/p&gt;
+
+&lt;p&gt;In the context of Pulsar, rate limiting helps to properly set consumer expectations about the performance that is sustainable.&lt;/p&gt;
+
+&lt;h2 id=&quot;current-rate-limiting-challenges-in-pulsar&quot;&gt;Current Rate Limiting Challenges in Pulsar&lt;/h2&gt;
+
+&lt;p&gt;The existing rate limiters in Pulsar have several problems:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;The default publishing rate limiter is ineffective in practice due to its high CPU overhead when operating at scale, making it unusable.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Additionally, the default rate limiter is inaccurate, and the rate limiting behavior is inconsistent. This inconsistency is one of the reasons why the “precise” rate limiter was introduced.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The “precise” rate limiter, while not exhibiting CPU issues, lacks the ability to configure an average rate limit over longer time periods. This limitation hinders the handling of traffic spikes by allowing bursting.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The “precise” rate limiter impacts the latencies of other topics that have not reached the rate limit. This impact is due to heavy lock contention on Netty IO threads that should optimally run non-blocking code. Lock contention causes slowdowns on all traffic served on the shared IO thread. This problem is reported as &lt;a href=&quot;https://github.com/apache/pulsar/issues/21442&quot; target=&quot;_blank&quot;&gt;issue #21442&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Having multiple rate limiting implementations and using “precise” as terminology exposes unnecessary internal details through the configuration interface. It is bad architectural practice to expose implementation details when that doesn’t provide additional value.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Pulsar relies on TCP/IP connection flow control for applying backpressure. However, single TCP connections get shared across multiple Pulsar producers and consumers multiplexed together.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;There is a clear need to improve Pulsar’s out-of-the-box rate limiting capabilities.&lt;/p&gt;
+
+&lt;h3 id=&quot;pulsar-tcpip-connection-multiplexing-challenge&quot;&gt;Pulsar TCP/IP Connection Multiplexing Challenge&lt;/h3&gt;
+
+&lt;p&gt;Pulsar relies on TCP/IP connection flow control for applying backpressure. Backpressure is achieved by pausing to read new messages from a connection, which eventually leads to a situation where the TCP/IP connection flow control “backpressures” all the way to the client. This type of backpressure solution is common in networking applications. However, the challenge in Pulsar is that a single TCP connection is commonly shared across multiple Pulsar producers and consumers, which are multiplexed together by the Pulsar client.&lt;/p&gt;
+
+&lt;p&gt;This creates a significant complication - all producers over that connection are throttled as one, rather than being individually rate limited. Similarly, rate limiters interact across streams unpredictably, impacting behavior. One rate limiter would throttle the connection, and another rate limiter would immediately unblock it.&lt;/p&gt;
+
+&lt;p&gt;The Apache Flink community encountered related issues from multiplexing backpressure on shared TCP connections. Their &lt;a href=&quot;https://flink.apache.org/2019/06/05/flink-network-stack.html#inflicting-backpressure-1&quot; target=&quot;_blank&quot;&gt;2019 blog post explains the problem and solution&lt;/a&gt; in Flink 1.5 to introduce explicit stream-specific flow control.&lt;/p&gt;
+
+&lt;p&gt;Pulsar could implement similar flow control changes to enable reliable per-producer rate limiting in the multiplexing connection scenario. One possible solution would be to have Pulsar producers use “permits” for flow control, in a similar way as &lt;a href=&quot;https://pulsar.apache.org/docs/next/developing-binary-protocol/#flow-control&quot; target=&quot;_blank&quot;&gt;Pulsar consumers use “permits” for flow control&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;It was also highlighted in the discussion that Kafka quotas have a way to communicate from the broker to the client that it is running over quota. There was also an example from HTTP where quota exhaustion can be communicated with the 429 (Too Many Requests) status code.&lt;/p&gt;
+
+&lt;p&gt;Alternatively, client configuration options could isolate specific producers or consumers on dedicated, non-shared connections to avoid contention. This solution could be implemented without any changes to the Pulsar binary protocol and could be delivered quickly. It would be a way to mitigate possible issues caused by connection multiplexing before the changes are delivered in the Pulsar binary protocol.&lt;/p&gt;
+
+&lt;p&gt;This highlights how Pulsar’s backpressure design impacts capabilities like rate limiting and would also need improvements.&lt;/p&gt;
+
+&lt;h2 id=&quot;arguments-against-pip-310-support-custom-publish-rate-limiters&quot;&gt;Arguments against “PIP-310: Support Custom Publish Rate Limiters”&lt;/h2&gt;
+
+&lt;p&gt;Introducing pluggable external rate limiters has concerning implications:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;It increases the overall system complexity without corresponding gains. Apache Pulsar already supports many plugin extensions, but further fragmentation should be avoided without clear benefit.&lt;/li&gt;
+  &lt;li&gt;Public interfaces must be maintained long-term, which can hinder refactoring and slow down future development.
+    &lt;ul&gt;
+      &lt;li&gt;Implementation details could leak into the public interfaces, making it harder to change these details.&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;No other messaging systems support custom rate limiters, so it is unclear why Pulsar would require such unique extensibility.&lt;/li&gt;
+  &lt;li&gt;Requiring external libraries just to make rate limiting usable in Pulsar would go against the good out-of-the-box experience of using Pulsar.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Here are some additional arguments against custom publish rate limiters:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;There is no evidence that custom rate limiters are necessary to solve concrete problems faced when operating Pulsar at scale. The current built-in rate limiters likely can be enhanced to handle typical use cases related to rate limiting.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Introducing custom rate limiters narrows the focus, while capacity management and service levels require a broader, system-wide perspective.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Merely fine-tuning custom rate limits cannot prevent overall system overload when operating a large Pulsar cluster. Custom limiters operate on a topic or namespace, ignoring cluster-wide resource usage and contention. Intelligent global capacity management capabilities are required to handle dynamic workloads.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;While custom rate limiters could provide more flexibility in modeling tenant usage, this does not inherently help meet tenant SLAs in a shared environment. Custom limiters introduce additional fragmentation, control loops, and components that must cooperate correctly at large scale.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;So far, there haven’t been concrete examples of what problems a custom rate limiter could resolve and how this would happen.&lt;/p&gt;
+    &lt;ul&gt;
+      &lt;li&gt;A concrete example has been about bursting, and that is a clear gap in the current functionality of rate limiters. Bursting support should be implemented in core Pulsar rate limiting while improving and fixing the issues of the existing Pulsar rate limiting solution.&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;In summary, custom rate limiters seem like an intricate solution lacking supporting evidence of real-world necessity. A better solution for all Pulsar users is fixing the issues in the current rate limiting and putting more effort into improving Pulsar’s multi-tenancy, service level management, and capacity management capabilities since that seems to be the main reason why custom publish rate limiters are proposed.&lt;/p&gt;
+
+&lt;p&gt;I’d like to mention that the discussion around PIP-310 has been very valuable, and it has brought up challenges in operating Pulsar at scale. Without these discussions, the important feedback loop for Pulsar development would be missing. For example, one of the identified gaps was related to protecting against misbehaving applications and denial-of-service attacks. Pulsar doesn’t currently have many capabilities in this area. It would be a useful feature for Pulsar operators to be able to block individual clients, consumers and producers when addressing certain situations such as misbehaving applications.&lt;/p&gt;
+
+&lt;p&gt;We all seem to share the same mission of improving OSS Apache Pulsar to meet the broader needs of messaging-as-a-service platform teams. By working together, we can achieve a lot, even in a relatively short time span.&lt;/p&gt;
+
+&lt;h2 id=&quot;proposal-for-pulsar-rate-limiting-enhancements&quot;&gt;Proposal for Pulsar Rate Limiting Enhancements&lt;/h2&gt;
+
+&lt;h3 id=&quot;problems-to-address-as-the-next-step&quot;&gt;Problems to address as the next step&lt;/h3&gt;
+
+&lt;p&gt;Rather than custom pluggability, effort should go towards overhauling the built-in rate limiting:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Consolidate the multiple existing rate limiting options into a single, configurable rate limiting solution
+    &lt;ul&gt;
+      &lt;li&gt;Remove the separate “precise” rate limiter. It is bad practice to leak implementation details to users when this is unnecessary.&lt;/li&gt;
+      &lt;li&gt;Add configurable options for allowing traffic bursting&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;Address these problems in existing Pulsar rate limiting:
+    &lt;ul&gt;
+      &lt;li&gt;High CPU overhead&lt;/li&gt;
+      &lt;li&gt;High lock contention that impacts shared Netty IO threads and adds latency to unrelated Pulsar topic producers&lt;/li&gt;
+      &lt;li&gt;Code maintainability
+        &lt;ul&gt;
+          &lt;li&gt;There are very few Pulsar core developers that understand how the current Pulsar rate limiting and backpressure work end-to-end.&lt;/li&gt;
+          &lt;li&gt;Improve understandability of code
+            &lt;ul&gt;
+              &lt;li&gt;Introduce clear concepts and abstractions that are reflected in the code to ease this (example: token bucket)&lt;/li&gt;
+            &lt;/ul&gt;
+          &lt;/li&gt;
+        &lt;/ul&gt;
+      &lt;/li&gt;
+      &lt;li&gt;Inconsistent behavior:
+        &lt;ul&gt;
+          &lt;li&gt;Connection Multiplexing currently causes a problem where multiple rate limiters operate on the same connection without knowing about each other. One rate limiter might throttle a connection and another immediately unthrottles at a different rate.&lt;/li&gt;
+          &lt;li&gt;Connections are throttled at multiple levels in Pulsar. For example, there’s a broker-level publisher rate limiting option. The multiple levels of throttling should be properly coordinated in the implementation. The current solution is not maintainable and some inconsistent behavior is caused by the lack of a proper model for coordinating throttling. The different levels of throttling might be competing on a single connection and this is another source of inconsistency besides the connection multiplexing.&lt;/li&gt;
+        &lt;/ul&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;solution-proposal&quot;&gt;Solution proposal&lt;/h3&gt;
+
+&lt;p&gt;One of the concrete solution plans is to use a token bucket-based algorithm to implement the rate limiter calculations.&lt;/p&gt;
+
+&lt;p&gt;Benefits of using a token bucket-based implementation:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;The conceptual model of the token bucket is well established in the domain of network QoS traffic policies and multi-tenant SaaS QoS.
+    &lt;ul&gt;
+      &lt;li&gt;Examples:
+        &lt;ul&gt;
+          &lt;li&gt;Wikipedia: &lt;a href=&quot;https://en.wikipedia.org/wiki/Token_bucket&quot; target=&quot;_blank&quot;&gt;Token bucket&lt;/a&gt;&lt;/li&gt;
+          &lt;li&gt;Cisco IoS documentation: &lt;a href=&quot;https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/qos_plcshp/configuration/15-mt/qos-plcshp-15-mt-book/qos-plcshp-oview.html#GUID-93BCD445-CC99-4808-BAE9-0527A57E671C&quot; target=&quot;_blank&quot;&gt;What Is a Token Bucket&lt;/a&gt;&lt;/li&gt;
+          &lt;li&gt;Amazon DynamoDB: &lt;a href=&quot;https://www.usenix.org/conference/atc22/presentation/elhemali&quot; target=&quot;_blank&quot;&gt;“Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service”&lt;/a&gt;&lt;/li&gt;
+          &lt;li&gt;Jack Vanlightly’s &lt;a href=&quot;https://jack-vanlightly.com/blog/2023/11/14/the-architecture-of-serverless-data-systems&quot; target=&quot;_blank&quot;&gt;The Architecture of Serverless Data Systems&lt;/a&gt; explains details of many SaaS services. Token bucket-based rate limiting is widely used in SaaS data systems.&lt;/li&gt;
+        &lt;/ul&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;Implementing the token bucket algorithm is extremely simple.&lt;/li&gt;
+  &lt;li&gt;The token bucket concept and abstraction makes it easier to understand the implementation and maintain the code over time.&lt;/li&gt;
+  &lt;li&gt;The token bucket algorithm is well suited for Netty’s asynchronous programming model.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Since the internals of Pulsar’s rate limiting aren’t currently exposed, it’s possible to refactor the internals of Pulsar to work well with an asynchronous non-blocking rate limiter implementation. This is a necessity in order to solve problems like &lt;a href=&quot;https://github.com/apache/pulsar/issues/21442&quot; target=&quot;_blank&quot;&gt;[Bug] RateLimiter lock contention when use precise publish rate limiter #21442&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Additionally, the proposed solution includes adding a new option to Pulsar clients. This option would allow for the configuration of Pulsar producers and consumers to isolate the specified producer or consumer at the TCP/IP connection level. This would help mitigate potential multiplexing issues when necessary.&lt;/p&gt;
+
+&lt;h4 id=&quot;avoiding-breaking-changes&quot;&gt;Avoiding breaking changes&lt;/h4&gt;
+
+&lt;p&gt;The only external change for Pulsar users would be the addition of configuring the bursting behavior and absolute maximum rate for each rate limiter. The default values could be selected in a way that provides a good usage experience for most users. Most users wouldn’t have to tune the bursting behavior.&lt;/p&gt;
+
+&lt;p&gt;This is to say that changing the current Pulsar rate limiting can be done without causing breaking changes. However, according to &lt;a href=&quot;https://www.hyrumslaw.com/&quot; target=&quot;_blank&quot;&gt;Hyrum’s law&lt;/a&gt;, this might be impossible. :smile:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;https://imgs.xkcd.com/comics/workflow.png&quot; alt=&quot;XKCD: Every change breaks someone's workflow&quot; /&gt;&lt;/p&gt;
+
+&lt;h4 id=&quot;asynchronous-non-blocking-rate-limiter-implementation-proof-of-concept-results&quot;&gt;Asynchronous non-blocking rate limiter implementation: Proof-of-concept results&lt;/h4&gt;
+
+&lt;p&gt;The token bucket algorithm is well-suited for Netty’s asynchronous programming model. It can be implemented in a lockless, non-blocking way, which is also extremely performant. I have implemented a proof of concept (PoC) at &lt;a href=&quot;https://github.com/lhotari/async-tokenbucket&quot; target=&quot;_blank&quot;&gt;https://github.com/lhotari/async-tokenbucket&lt;/a&gt; to provide sufficient confidence in taking the next steps in this direction.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://github.com/lhotari/async-tokenbucket/blob/master/src/main/java/com/github/lhotari/asynctokenbucket/AsyncTokenBucket.java&quot; target=&quot;_blank&quot;&gt;AsyncTokenBucket&lt;/a&gt; is an asynchronous, non-blocking, lockless token bucket algorithm implementation optimized for performance with highly concurrent use. It doesn’t use synchronization or blocking. Instead, it uses compare-and-swap (CAS) operations. The use of CAS fields could cause contention in the form of CAS loops, but this problem is addressed in the solution with multiple levels of CAS fields, so multiple threads don’t frequently compete to update a CAS field in a CAS loop. The JVM’s LongAdder class is used in the hot path to hold the sum of consumed tokens. The LongAdder class is a proven solution for addressing the CAS loop contention problem for a counter.&lt;/p&gt;
+
+&lt;p&gt;The main usage flow of the AsyncTokenBucket class is as follows:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;Tokens are consumed by calling the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;consumeTokens&lt;/code&gt; method.&lt;/li&gt;
+  &lt;li&gt;The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;calculatePauseNanos&lt;/code&gt; method is called to calculate the duration of a possible pause when the tokens are fully consumed.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AsyncTokenBucket&lt;/code&gt; class doesn’t have external side effects. It’s like a stateful function, just like a counter function. Indeed, it is just a sophisticated counter. It can be used as a building block for implementing higher-level asynchronous rate limiter implementations, which do need side effects.&lt;/p&gt;
+
+&lt;p&gt;As part of the proof of concept, the performance was validated. This particular test measures the overhead of maintaining the token bucket calculations across 1, 10, and 100 threads. Here is an example output of running the &lt;a href=&quot;https://github.com/lhotari/async-tokenbucket/blob/9c807bedec18a0e968113bdd0394ecebe6e4cf32/src/test/java/com/github/lhotari/asynctokenbucket/AsyncTokenBucketTest.java#L66-L100&quot; target=&quot;_blank&quot;&gt;AsyncTokenBucketTest&lt;/a&gt; on a Dell XPS 2019 i9 laptop:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;❯ ./gradlew performanceTest
+
+&amp;gt; Task :performanceTest
+
+AsyncTokenBucketTest &amp;gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &amp;gt; [1] 1 STANDARD_OUT
+    Consuming for 10 seconds...
+    Counter value 125128028 tokens:199941612
+    Achieved rate: 12,512,802 ops per second with 1 threads
+    Consuming for 10 seconds...
+    Counter value 126059043 tokens:199920507
+    Achieved rate: 12,605,904 ops per second with 1 threads
+
+AsyncTokenBucketTest &amp;gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &amp;gt; [1] 1 PASSED
+
+AsyncTokenBucketTest &amp;gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &amp;gt; [2] 10 STANDARD_OUT
+    Consuming for 10 seconds...
+    Counter value 1150055476 tokens:45309290
+    Achieved rate: 115,005,547 ops per second with 10 threads
+    Consuming for 10 seconds...
+    Counter value 1152924215 tokens:45692611
+    Achieved rate: 115,292,421 ops per second with 10 threads
+
+AsyncTokenBucketTest &amp;gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &amp;gt; [2] 10 PASSED
+
+AsyncTokenBucketTest &amp;gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &amp;gt; [3] 100 STANDARD_OUT
+    Consuming for 10 seconds...
+    Counter value 1650149177 tokens:-451095706
+    Achieved rate: 165,014,917 ops per second with 100 threads
+    Consuming for 10 seconds...
+    Counter value 1664288687 tokens:-462912837
+    Achieved rate: 166,428,868 ops per second with 100 threads
+
+AsyncTokenBucketTest &amp;gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &amp;gt; [3] 100 PASSED
+
+BUILD SUCCESSFUL in 1m 15s
+3 actionable tasks: 3 executed
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;With 100 threads, about 165M token bucket ops/second are achieved. On a single thread, it’s about 12.5M token bucket ops/second.
+That’s a promising result in order to meet the sufficient performance characteristics for Pulsar rate limiting.&lt;/p&gt;
+
+&lt;h3 id=&quot;some-implementation-details-of-the-proposed-solution&quot;&gt;Some implementation details of the proposed solution&lt;/h3&gt;
+
+&lt;p&gt;In addition to the &lt;a href=&quot;https://github.com/lhotari/async-tokenbucket&quot; target=&quot;_blank&quot;&gt;asynchronous non-blocking token bucket implementation PoC&lt;/a&gt;, I made a quick few hour development spike within the Pulsar code base to gain confidence about the implementation direction to start with.&lt;/p&gt;
+
+&lt;p&gt;One possible implementation strategy is to focus on replacing the existing rate limiter with &lt;a href=&quot;https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-common/src/main/java/org/apache/pulsar/common/util/AsyncTokenBucket.java&quot; target=&quot;_blank&quot;&gt;AsyncTokenBucket&lt;/a&gt; while simultaneously addressing the throttling coordination issue and integrating all of this in the existing code base. The remaining parts of the solution would emerge while working on the implementation iteratively. I believe that the spike provides a sufficient level of confidence that this implementation strategy could be viable.&lt;/p&gt;
+
+&lt;p&gt;In the spike, I added a &lt;a href=&quot;https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-broker/src/main/java/org/apache/pulsar/broker/service/ThrottleTracker.java&quot; target=&quot;_blank&quot;&gt;“ThrottleTracker” class&lt;/a&gt; to handle tracking of the connection’s throttling status. There’s a subclass, &lt;a href=&quot;https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-broker/src/main/java/org/apache/pulsar/broker/service/ServerCnx.java#L270-L304&quot; target=&quot;_blank&quot;&gt;ServerCnxThrottleTracker&lt;/a&gt;, where the intention is to interface deeper with the ServerCnx class while keeping the core throttling coordination logic in the ThrottleTracker class. Please note that the spike was developed in a few hours and doesn’t contain a workable end-to-end solution where these parts are fully integrated with required changes.&lt;/p&gt;
+
+&lt;p&gt;There’s a need to coordinate all various reasons why a connection is throttled and only if all throttling reasons are cleared, the connection should be unblocked. This is what the ThrottleTracker achieves with a somewhat similar approach as Netty’s reference counting works for buffer allocations. The different reasons to throttle are tracked with a counter. Only when the counter reaches back to 0 will the connection get unblocked by setting autoread back to true. This would solve the problem with inconsistency with throttling across multiple rate limiters.&lt;/p&gt;
+
+&lt;p&gt;As mentioned above, the exact internal changes in different parts of Pulsar would emerge while integrating the &lt;a href=&quot;https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-common/src/main/java/org/apache/pulsar/common/util/AsyncTokenBucket.java&quot; target=&quot;_blank&quot;&gt;AsyncTokenBucket&lt;/a&gt; and ThrottleTracker/ServerCnxThrottleTracker classes into the Pulsar code base to perform rate limiting.
+For example, this will directly impact the &lt;a href=&quot;https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-broker/src/main/java/org/apache/pulsar/broker/service/PublishRateLimiter.java&quot; target=&quot;_blank&quot;&gt;PublishRateLimiter&lt;/a&gt; interface among the other rate limiter related interfaces and implementations.&lt;/p&gt;
+
+&lt;p&gt;The goal is to change all throttling decisions into delegated calls to ServerCnxThrottleTracker. There will be 2 ways to throttle a connection with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ServerCnxThrottleTracker&lt;/code&gt;:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;setting a flag and unsetting it. (used by throttling based on configured &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;maxMessagePublishBufferSizeInMB&lt;/code&gt; or &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;maxPendingPublishRequestsPerConnection&lt;/code&gt; value)&lt;/li&gt;
+  &lt;li&gt;throttling for a specified duration and resuming after that (will be used for various rate limiters)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The publish rate limiting will be using the throttling for a specified duration. The PublishRateLimiter implementation won’t be responsible for handling the throttling. Its role will be simply about:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;tracking consumed bytes and messages against the configured limits (delegates this to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AsyncTokenBucket&lt;/code&gt;)&lt;/li&gt;
+  &lt;li&gt;if the limit is exceeded, return a pause duration to the caller (calculated with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AsyncTokenBucket&lt;/code&gt;)&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The integration code will pass the pause duration to the ServerCnxThrottleTracker, and that’s how the connection will get throttled. Concurrent calls coming from various rate limiters are all handled in the ServerCnxThrottleTracker in a thread-safe and performant way, ensuring consistency in all cases.&lt;/p&gt;
+
+&lt;h3 id=&quot;proposed-timeline&quot;&gt;Proposed timeline&lt;/h3&gt;
+
+&lt;p&gt;This proposed solution isn’t far off. It’s realistic to say that the proposed improvements could be part of a Pulsar feature release in less than three months and would be ready for production use.&lt;/p&gt;
+
+&lt;p&gt;Let’s make it happen! :rocket:&lt;/p&gt;
+
+&lt;p&gt;After this first step, it would be time to start focusing on Pulsar cluster wide capacity management to meet the needs of messaging-as-a-service platform teams dealing with demanding service level management and capacity management requirements. There’s already the Resource Group concept introduced in &lt;a href=&quot;https://github.com/apache/pulsar/wiki/PIP-82:-Tenant-and-namespace-level-rate-limiting&quot; target=&quot;_blank&quot;&gt;“PIP 82: Tenant and namespace level rate limiting”&lt;/a&gt;. That’s a good starting point for further improvements.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://pulsar.apache.org/community/#section-discussions&quot; target=&quot;_blank&quot;&gt;Please join the Pulsar developer mailing list&lt;/a&gt; to keep updated of the developments also in this area of Pulsar. You are also welcome &lt;a href=&quot;https://pulsar.apache.org/community/#section-discussions&quot; target=&quot;_blank&quot;&gt;join the discussions on the mailing list and on Pulsar Slack&lt;/a&gt;. You can also contact me directly by email &lt;a href=&quot;mailto:lhotari@apache.org&quot; target=&quot;_blank&quot;&gt;lhotari@apache.org&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Tomorrow on November 23rd, this blog post will be presented and discussed in the &lt;a href=&quot;https://github.com/apache/pulsar/wiki/Community-Meetings&quot; target=&quot;_blank&quot;&gt;Pulsar community meeting&lt;/a&gt; that happens online. You are more than welcome to join &lt;a href=&quot;https://github.com/apache/pulsar/wiki/Community-Meetings&quot; target=&quot;_blank&quot;&gt;this Zoom meeting&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;I’m looking forward to more participation in Pulsar development from messaging-as-a-service platform teams!&lt;/p&gt;</content><author><name></name></author><category term="pulsar" /><category term="pulsar-dev" /><category term="slo" /><summary type="html">Context</summary></entry><entry><title type="html">Scalable distributed system principles in the context of redesigning Apache Pulsar’s metadata solution</title><link href="https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles.html" rel="alternate" type="text/html" title="Scalable distributed system principles in the context of redesigning Apache Pulsar’s metadata solution" /><published>2023-03-02T09:38:00+00:00</published><updated>2023-03-02T09:38:00+00:00</updated><id>https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles</id><content type="html" xml:base="https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles.html">&lt;h2 id=&quot;context&quot;&gt;Context&lt;/h2&gt;
+
+&lt;p&gt;Welcome to continue to read about the possible design for rearchitecting Apache Pulsar to handle 100 million topics.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html&quot;&gt;previous blog post&lt;/a&gt; and the &lt;a href=&quot;/pulsar/2022/10/21/possible-high-level-architecture.html&quot;&gt;first blog in the series&lt;/a&gt; explain more about the context.&lt;/p&gt;
+
+&lt;p&gt;This is the last article in the “rearchitecting Apache Pulsar to handle 100 million topics” blog post series.&lt;/p&gt;
+
+&lt;h2 id=&quot;thoughts-about-architecture-design-in-the-context-of-apache-pulsars-metadata-solution&quot;&gt;Thoughts about architecture design in the context of Apache Pulsar’s metadata solution&lt;/h2&gt;
+
+&lt;p&gt;The target system in this case is Apache Pulsar’s metadata solution. This isn’t a description of a holistic architecture design which would be conducted in a top-down approch. This blog post is more about sharing thoughts that what I think that is important to consider when designing the solution.&lt;/p&gt;
+
+&lt;p&gt;In earlier blog posts, there has been the design approach of “form follows function”. This blog post takes a different view point and describes some of the driving forces. The “form follows function” approach is helpful in focusing on the core essence of the system so that the architecture is adapted to the true purpose of the system and not the other way around. The book &lt;a href=&quot;https://learning.oreilly.com/library/view/system-architecture-strategy/9780136462989/xhtml/fileP7000495919000000000000000000A70.xhtml#:-:text=Function%20is%20the%20activity%2C,raction%20between%20entities.&quot;&gt;System Architecture: Strategy and Product Development for Complex Systems&lt;/a&gt; is one of the best descriptions of this design philosophy and how it can be applied.&lt;/p&gt;
+
+&lt;p&gt;Iterative design is about bouncing back and forth between top-down and bottom-up. What is necessary is the architecture vision that emerges as part of these exercises. The architecture is never perfect and eventually it will be about making decision decisions and tradeoffs in the design.&lt;/p&gt;
+
+&lt;p&gt;In the end of the day, the designed system will only be successful when it’s valuable. It’s valuable when the benefits it produces is more than the cost.
+The Apache Pulsar metadata solution doesn’t provide direct end user value. However, the benefits and value contribute to the value creation of the Apache Pulsar system. 
+Holistic system thinking and system design are essential when making larger scale redesign. However, that is not the scope of this blog post.&lt;/p&gt;
+
+&lt;h2 id=&quot;thoughts-about-scalable-distributed-systems-principles-in-the-context-of-apache-pulsars-metadata-solution&quot;&gt;Thoughts about scalable distributed systems principles in the context of Apache Pulsar’s metadata solution&lt;/h2&gt;
+
+&lt;p&gt;Scalability is defined in Wikipedia as “the property of a system to handle a growing amount of work by adding resources to the system.”&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://learning.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/&quot;&gt;“Designing Data-Intensive Applications” by Martin Kleppmann&lt;/a&gt; explains that the architecture of systems that operate at large scale is usually very highly specific to the application. There is no single architecture that works for all use cases and scales universally. However, the book discusses general purpose design elements and approaches that can be adopted to create a suitable architecture.&lt;/p&gt;
+
+&lt;p&gt;When designing the architecture of the target system, it is very useful to reflect on the general purpose design elements and approaches of scalable distributed systems.
+This will have a great impact on the architecture. The system decomposition to components and what they are distributed and what internal protocols (messaging interactions) are used to communicate between the components.&lt;/p&gt;
+
+&lt;p&gt;Besides the scalable distributed systems principles, the data consistency requirements and principles have a great impact on component distribution and interactions.
+All of this design must happen iteratively until the implementation of a system becomes approachable. It’s possible to start immediately and iterate, but the principles will help guide the way.&lt;/p&gt;
+
+&lt;h3 id=&quot;partitioning--sharding&quot;&gt;Partitioning / Sharding&lt;/h3&gt;
+
+&lt;p&gt;The blog post &lt;a href=&quot;/pulsar/2022/10/18/view-of-pulsar-metadata-store.html&quot;&gt;“A critical view of Pulsar’s Metadata store abstraction”&lt;/a&gt; highlighted the necessity for scalability, particularly a &lt;strong&gt;partitioning (sharding) design&lt;/strong&gt; for the given system. Chapter 6 in the DDIA book covers partitioning extensively, which is an often omitted detail in systems with scalability requirements.&lt;/p&gt;
+
+&lt;h3 id=&quot;shared-nothing--redundancy&quot;&gt;Shared nothing &amp;amp; redundancy&lt;/h3&gt;
+
+&lt;p&gt;Shared nothing architecture is a principle related to partitioning in which each node running an application is independent and there are no shared resources, such as a shared disk or file system. Besides Partitioning, replication is also necessary to add redundancy so that individual node failures can be tolerated.&lt;/p&gt;
+
+&lt;h3 id=&quot;sufficient-data-consistency-depending-on-the-use-cases&quot;&gt;Sufficient data consistency depending on the use cases&lt;/h3&gt;
+
+&lt;p&gt;In the context of Apache Pulsar’s metadata solution, an efficient design should take into account partitioning and replication, as well as data consistency requirements.
+Metadata should be handled at a sufficient consistency level depending on the use case. The assumption is that eventual consistency is less costly and more performant, and should be used when there’s a way to use it.&lt;/p&gt;
+
+&lt;h3 id=&quot;efficiency-through-eventual-consistency&quot;&gt;Efficiency through eventual consistency&lt;/h3&gt;
+
+&lt;p&gt;The design could also be crafted to enable proper and efficient handling of eventual consistency for metadata in the system. Optimistic locking is an often used mechanism for managing eventual consistent data. When information is sent between components, a version field can be included to indicate which version the command or event should be referring to. Conflict resolution strategies could be applied to handle version conflicts.&lt;/p&gt;
+
+&lt;p&gt;In the context of Pulsar, there have been some internal discussions on the design that it would be useful if the topic lookup information could also contain some versioning information so that when the client connects to the broker where the topic has been assigned, there would be a way to allow independent asynchronous transmission of topic assignments so that the broker would know that the client is ahead of the individual broker in its metadata information.&lt;/p&gt;
+
+&lt;h3 id=&quot;enabling-parallelism&quot;&gt;Enabling parallelism&lt;/h3&gt;
+
+&lt;p&gt;It’s possible to handle this also without versioning information, but it has just come up as one example of where eventual consistent delivery of data as events between components could be handled without too much synchronicity which can be preventing parallelism, which is a really important property of high performance systems.&lt;/p&gt;
+
+&lt;h2 id=&quot;thoughts-about-data-consistency-modeling-that-impacts-the-architecture&quot;&gt;Thoughts about data consistency modeling that impacts the architecture&lt;/h2&gt;
+
+&lt;p&gt;During my career as a consultant helping companies succeed with software development and build great products, I came across a common pattern that software teams struggled with: data consistency design. Today, it is very common that an agile software team is put to deliver software without much design effort and thought put into the design. “If it works, don’t fix it” approach is fine for software where it’s fine that data consistency is more like a best-efforts consideration of the system. However, when data consistency is essential and data inconsistency problems have a negative business impact, it’s useful to do design.&lt;/p&gt;
+
+&lt;h3 id=&quot;consistency-boundaries&quot;&gt;Consistency boundaries&lt;/h3&gt;
+
+&lt;p&gt;Back in the day, the consistency boundaries of a system where designed around database transactions. The consistency design was focused on designing how database transactions are created and when committed or rolled back. In distributed systems, we must continue to do put effort in ensuring data consistency, but it requires different set of methods. The properties are also different. There is no atomicity with distributed systems as there was in traditional monolithic non-distributed systems. Distributed transactions could provide abstractions for atomicity, but that usually comes with a heavy tradeoff cost which makes it not suitable for efficient large scale systems.&lt;/p&gt;
+
+&lt;p&gt;One replacement for distributed transactions for distributed systems is the &lt;a href=&quot;https://microservices.io/patterns/data/saga.html&quot;&gt;saga pattern&lt;/a&gt;. However, that causes the focus go away from the actual consistency design in the design of a distributed system.&lt;/p&gt;
+
+&lt;p&gt;A more useful practical design approach is explained in Jonas Bonér’s book  “Reactive Microsystems”, in Chapter 4, Event-First Domain-Driven Design:&lt;/p&gt;
+&lt;blockquote&gt;
+  &lt;p&gt;&lt;strong&gt;Think in Terms of Consistency Boundaries&lt;/strong&gt;&lt;/p&gt;
+
+  &lt;p&gt;I’ve found it useful to think and design in terms of &lt;em&gt;consistency boundaries&lt;/em&gt; for the services:&lt;/p&gt;
+  &lt;ol&gt;
+    &lt;li&gt;Resist the urge to begin with thinking about the &lt;em&gt;behavior&lt;/em&gt; of a service.&lt;/li&gt;
+    &lt;li&gt;Begin with the data—the facts—and think about how it is coupled and what dependencies it has.&lt;/li&gt;
+    &lt;li&gt;Identify and model the integrity constraints and what needs to be guaranteed, from a domain- and business-specific view. Interviewing domain experts and stakeholders is essential in this process.&lt;/li&gt;
+    &lt;li&gt;Begin with zero guarantees, for the smallest dataset possible. Then, add in the weakest level of guarantee that solves your problem while trying to keep the size of the dataset to a minimum.&lt;/li&gt;
+    &lt;li&gt;Let the &lt;em&gt;Single Responsibility Principle&lt;/em&gt; (discussed in “Single Responsibility”) be a guiding principle.&lt;/li&gt;
+  &lt;/ol&gt;
+
+  &lt;p&gt;The goal is to try to minimize the dataset that needs to be &lt;em&gt;strongly consistent&lt;/em&gt;. After you have defined the essential dataset for the service, &lt;em&gt;then&lt;/em&gt; address the behavior and the protocols for exposing data through interacting with other services and systems—defining our &lt;em&gt;unit of consistency&lt;/em&gt;.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;Lightbend offers this book as a &lt;a href=&quot;https://www.lightbend.com/blog/reactive-microsystems-the-evolution-of-microservices-at-scale-free-oreilly-report-by-jonas-boner&quot;&gt;free download&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The author refers to Pat Helland’s paper &lt;a href=&quot;http://cidrdb.org/cidr2005/papers/P12.pdf&quot;&gt;“Data on the Outside versus Data on the Inside”&lt;/a&gt;. Bonér references also &lt;a href=&quot;http://highscalability.com/blog/2010/12/16/7-design-patterns-for-almost-infinite-scalability.html&quot;&gt;7 Design Patterns For Almost-Infinite Scalability&lt;/a&gt; which has further references to Pat Helland’s paper &lt;a href=&quot;https://www.ics.uci.edu/~cs223/papers/cidr07p15.pdf&quot;&gt;Life beyond Distributed Transactions: an Apostate’s Opinion&lt;/a&gt; and &lt;a href=&quot;https://www.dddcommunity.org/library/vernon_2011/&quot;&gt;Vaughn Vernon’s articles about Effective Aggregate Design&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;end-to-end-principle&quot;&gt;End-to-end principle&lt;/h3&gt;
+
+&lt;p&gt;In addition to the “consistency boundaries”, a closely related design principle is the end-to-end principle. The foundations of the internet were build on this design principle.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;http://web.mit.edu/Saltzer/www/publications/endtoend/endtoend.pdf&quot;&gt;“End-to-end arguments in system design – Saltzer, Reed, &amp;amp; Clark 1984”&lt;/a&gt; is a classic from almost 40 years ago. &lt;a href=&quot;https://blog.acolyer.org/2014/11/14/end-to-end-arguments-in-system-design/&quot;&gt;The commentary blog post about this article in the Morning Paper blog&lt;/a&gt; is a good way to get familiar with this article.&lt;/p&gt;
+
+&lt;p&gt;Some quotes from the commentary:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;The end-to-end argument says that many functions in a communication system can only be completely and correctly implemented with the help of the application(s) at the endpoints.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;End-to-end arguments can help with layered protocol design and “may be viewed as part of a set of rational principles for organizing such layered systems.”&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;Wikipedia contains more details about the &lt;a href=&quot;the https://en.wikipedia.org/wiki/End-to-end_principle&quot;&gt;end-to-end principle&lt;/a&gt;&lt;/p&gt;
+
+&lt;p&gt;Another commentary paper is &lt;a href=&quot;https://www.csd.uoc.gr/~hy435/material/moors.pdf&quot;&gt;A critical review of “End-to-end arguments in system design” – Moors 2002&lt;/a&gt;. The conclusions of this paper:&lt;/p&gt;
+&lt;blockquote&gt;
+  &lt;p&gt;The end-to-end arguments are a valuable guide for placing
+functionality in a communication system. End-to-end implementations  are
+supported by the need for correctness of implementation, their ability
+to ensure appropriate service, and to facilitate network transparency,
+ease of deployment, and decentralism. Care must be taken in identifying
+the endpoints, and end-to-end implementations can have a mixed impact on
+performance and scalability. To determine if the end-to-end arguments
+are applicable to a certain service, it is important to consider what
+entity is responsible for ensuring that service, and the extent to which
+that entity can trust other entities to maintain that service. The
+end-to-end arguments are insufficiently compelling to outweigh other
+criteria for certain functions such as routing and congestion control.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;h2 id=&quot;closing-words-for-rearchitecting-apache-pulsar-to-handle-100-million-topics&quot;&gt;Closing words for “rearchitecting Apache Pulsar to handle 100 million topics”&lt;/h2&gt;
+
+&lt;p&gt;This blog post didn’t include practical actions that will take the implementation forward.
+As Jerome Bruner has said “Teaching is about speculating about possibility.”. This blog post series of “rearchitecting Apache Pulsar to handle 100 million topics” has been about teaching by speculating about possibility. Perhaps this possibility has also inspired others in the Apache Pulsar community. I hope so.&lt;/p&gt;
+
+&lt;p&gt;“If you want to build a ship,&lt;br /&gt;
+don’t drum up the people&lt;br /&gt;
+to gather wood, divide the&lt;br /&gt;
+work, and give orders.&lt;br /&gt;
+Instead, teach them to yearn&lt;br /&gt;
+for the vast and endless sea.”&lt;/p&gt;
+
+&lt;p&gt;(from Antoine de Saint-Exupéry: The Little Prince)&lt;/p&gt;
+
+&lt;p&gt;Perhaps one day, the Apache Pulsar community will build that ship that takes Apache Pulsar to the next level.&lt;/p&gt;</content><author><name></name></author><category term="pulsar" /><category term="pulsar-ng" /><summary type="html">Context</summary></entry><entry><title type="html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 4</title><link href="https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html" rel="alternate" type="text/html" title="Rearchitecting Apache Pulsar to handle 100 million topics, Part 4" /><published>2022-11-29T07:52:13+00:00</published><updated>2022-11-29T07:52:13+00:00</updated><id>https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4</id><content type="html" xml:base="https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">&lt;h2 id=&quot;context&quot;&gt;Context&lt;/h2&gt;
+
+&lt;p&gt;Welcome to continue to read about the possible design for rearchitecting Apache Pulsar to handle 100 million topics.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html&quot;&gt;previous blog post explains the context&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;project-apache-pulsar-nextgen&quot;&gt;Project “Apache Pulsar NextGen”&lt;/h2&gt;
+
+&lt;p&gt;Rearchitecting Apache Pulsar to handle 100 million topics is one of the goals of the next generation architecture for Apache Pulsar. 
+This architecture is unofficial and it hasn’t been approved or decided by the Apache Pulsar project. 
+Before the project can decide, it is necessary to demonstrate that the suggested changes in the architecture are meaningful and address the problems that have become limiting factors for the future development of Apache Pulsar.&lt;/p&gt;
+
+&lt;h3 id=&quot;summary-of-goals&quot;&gt;Summary of goals&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;introduce a &lt;a href=&quot;/pulsar/2022/10/21/possible-high-level-architecture.html&quot;&gt;high level architecture with a sharding model&lt;/a&gt; that scales from 1 to 100 million topics and beyond.&lt;/li&gt;
+  &lt;li&gt;address the micro-outages issue with Pulsar topics. This was explained in the blog post &lt;a href=&quot;/pulsar/2022/10/14/pulsars-promise.html&quot;&gt;“Pulsar’s high availability promise and its blind spot”&lt;/a&gt;.&lt;/li&gt;
+  &lt;li&gt;provide a solid foundation for Pulsar future development by getting rid of the current &lt;a href=&quot;/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html&quot;&gt;namespace bundle centric design&lt;/a&gt; which causes unnecessary limitations and complexity to any improvements in Pulsar load balancing.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;the-way-forward&quot;&gt;The way forward&lt;/h3&gt;
+
+&lt;p&gt;&lt;a href=&quot;/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html#next-experiments--milestones-on-the-way-toward&quot;&gt;The previous blog post explained the next milestone&lt;/a&gt;, the minimal implementation to integrate the new metadata layer to Pulsar.
+This blog post will continue with the detailed design that is necessary to get the implementation going.&lt;/p&gt;
+
+&lt;h2 id=&quot;topic-lookup-and-assignment-flow---components-and-interaction&quot;&gt;Topic lookup and assignment flow - components and interaction&lt;/h2&gt;
+
+&lt;p&gt;The plan for the first steps in the implementation is to restore pulsar-discovery-service (&lt;a href=&quot;https://github.com/codingthestreams/pulsar/commits/develop&quot;&gt;already in progress in develop branch&lt;/a&gt;) and then start modifying the solution where we migrate towards the new architecture.&lt;/p&gt;
+
+&lt;p&gt;As explained &lt;a href=&quot;/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html#next-experiments--milestones-on-the-way-toward&quot;&gt;in the previous blog post&lt;/a&gt;, a Pulsar client will connect to the discovery service for lookup.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;https://pulsar.apache.org/assets/images/binary-protocol-topic-lookup-f013216a8dae04823eb9d39a0f2e264e.png&quot; alt=&quot;Topic lookup&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;This is a point where we will start the “walking skeleton” by keeping the solution “working” at least for the “happy path” of Pulsar consumers and producers.
+In the new architecture, the topic lookup will trigger the topic assignment. That is the reason why it’s useful to call the end-to-end flow as “topic lookup and assignment flow”.&lt;/p&gt;
+
+&lt;h3 id=&quot;components-participating-in-the-topic-lookup-and-assignment-flow&quot;&gt;Components participating in the topic lookup and assignment flow&lt;/h3&gt;
+
+&lt;p&gt;There was a draft listing of possible components &lt;a href=&quot;/pulsar/2022/10/21/possible-high-level-architecture.html#storage-model-events-are-the-source-of-truth&quot;&gt;in one of the previous blog posts&lt;/a&gt;:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;topic shard inventory&lt;/li&gt;
+  &lt;li&gt;tenant shard inventory&lt;/li&gt;
+  &lt;li&gt;namespace shard inventory&lt;/li&gt;
+  &lt;li&gt;topic controller&lt;/li&gt;
+  &lt;li&gt;cluster load manager&lt;/li&gt;
+  &lt;li&gt;broker load manager&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This could be a starting point for describing the components and the roles.&lt;/p&gt;
+
+&lt;p&gt;&lt;img class=&quot;mermaid&quot; src=&quot;https://mermaid.ink/svg/eyJjb2RlIjoiJSV7aW5pdDogeyd0aGVtZSc6ICduZXV0cmFsJ319JSVcbnNlcXVlbmNlRGlhZ3JhbVxuYXV0b251bWJlclxucGFydGljaXBhbnQgUEMgYXMgUHVsc2FyIGNsaWVudFxucGFydGljaXBhbnQgRFMgYXMgRGlzY292ZXIgc2VydmljZVxucGFydGljaXBhbnQgVEMgYXMgVG9waWMgY29udHJvbGxlcjxici8-KHNoYXJkZWQpXG5wYXJ0aWNpcGFudCBDTSBhcyBDbHVzdGVyIG1hbmFnZXJcbnBhcnRpY2lwYW50IEJNIGFzIEJyb2tlciBtYW5hZ2VyPGJyLz4oc2hhcmRlZClcbnBhcnRpY2lwYW50IEIgYXMgQnJva2VyXG5wYXJ0aWNpcGFudCBUTkkgYXMgVGVuYW50IGludmVudG9yeTxici8-KHNoYXJkZWQpXG5wYXJ0aWNpcGFudCBOSSBhcyBOYW1lc3BhY2UgaW52ZW50b3J5PGJyLz4oc2hhcmRlZClcbnBhcnRpY2lwYW50IFRJIGFzIFRvcGljIGludmVudG9yeTxici8-KHNoYXJkZWQpXG5CLSlCTTogRXN0YWJsaXNoIHNlc3Npb25cbkJNLSlCOiBTZXNzaW9uIGlkXG5sb29wXG5CLSlCTTogSGVhcnRiZWF0XG5CLSlCTTogTG9hZCByZXBvcnRcbmVuZFxuVEMtPj4rQ006IExlYXNlIGNhcGFjaXR5IHVuaXRzIGZvciBhc3NpZ25tZW50c1xuQ00tPj4rQk06IExlYXNlIGNhcGFjaXR5IHVuaXRzIGZvciBhc3NpZ25tZW50c1xuQk0tPj4tQ006IENhcGFjaXR5IHVuaXRzIGxlYXNlXG5DTS0-Pi1UQzogQ2FwYWNpdHkgdW5pdHMgbGVhc2VcblBDLT4-K0RTOiBMb29rdXAgdG9waWNcbkRTLT4-K1RDOiBMb29rdXAgdG9waWNcblRDLT4-K0JNOiBBc3NpZ24gdG9waWNcbkJNLT4-LVRDOiBUb3BpYyBhc3NpZ25tZW50IHJlY2VpdmVkIChwb3NpdGlvbilcbkJNLSlUTkk6IFN1YnNjcmliZSB0ZW5hbnQgbWV0YWRhdGEgJiBwb2xpY3lcbkJNLSlOSTogU3Vic2NyaWJlIG5hbWVzcGFjZSBtZXRhZGF0YSAmIHBvbGljeVxuQk0tKVRJOiBTdWJzY3JpYmUgdG9waWMgbWV0YWRhdGEgJiBwb2xpY3lcblROSS0pQk06IFRlbmFudCBtZXRhZGF0YSAmIHBvbGljeVxuTkktKUJNOiBOYW1lc3BhY2UgbWV0YWRhdGEgJiBwb2xpY3lcblRJLSlCTTogVG9waWMgbWV0YWRhdGEgJiBwb2xpY3lcbkJNLT4-QjogQXNzaWduIHRvcGljIChpbmNsdWRlcyB0ZW5hbnQsIG5zLCB0b3BpYyBtZXRhZGF0YSlcbk5vdGUgb3ZlciBCTSxCOiBCcm9rZXIgbWFuYWdlciBrZWVwcyB0cmFjayBvZiBtZXRhZGF0YSAmIHBvbGljeSBkYXRhPGJyLz50aGF0IGhhcyBiZWVuIHNlbnQgdG8gdGhlIGJyb2tlciBkdXJpbmcgdGhlIHNlc3Npb24uPGJyLz5UaGUgYnJva2VyIGlzIGV4cGVjdGVkIHRvIGNhY2hlIGFsbCBtZXRhZGF0YS5cbkItKUJNOiBVcGRhdGUgc3luYyBwb3NpdGlvblxuQk0tKVRDOiBTeW5jIHBvc2l0aW9uIGZvciBicm9rZXJcblRDLT4-LURTOiBMb29rdXAgdG9waWMgcmVzcG9uc2VcbkRTLT4-LVBDOiBMb29rdXAgdG9waWMgcmVzcG9uc2UiLCJtZXJtYWlkIjp7InRoZW1lIjoibmV1dHJhbCJ9fQ&quot; /&gt;&lt;/p&gt;
+
+&lt;h3 id=&quot;component-communications&quot;&gt;Component communications&lt;/h3&gt;
+
+&lt;p&gt;In the architecture, there’s a need for communication from each sharded component to components of other shards.
+The initial plan is to use either gRPC or &lt;a href=&quot;https://rsocket.io/&quot;&gt;RSocket protocol&lt;/a&gt; for implementing this communication.&lt;/p&gt;
+
+&lt;p&gt;The discovery of other shards is via the “cluster manager” component. That provides services for service discovery.&lt;/p&gt;
+
+&lt;p&gt;The current assumption is that each shard is forms a Raft group and all components are sharded across these shards.
+The cluster manager would form it’s own separate Raft group.&lt;/p&gt;
+
+&lt;p&gt;Whenever the leader of the shard gets assigned, it will connect to the cluster manager and update the leader’s endpoint address.
+All nodes of all shards will keep a connection to the cluster manager and get informed of the shard leader changes.&lt;/p&gt;
+
+&lt;p&gt;&lt;img class=&quot;mermaid&quot; src=&quot;https://mermaid.ink/svg/eyJjb2RlIjoiJSV7aW5pdDogeyd0aGVtZSc6ICduZXV0cmFsJ319JSVcbnNlcXVlbmNlRGlhZ3JhbVxuYXV0b251bWJlclxucGFydGljaXBhbnQgQ00gYXMgQ2x1c3RlciBtYW5hZ2VyJ3M8YnIvPk1lbWJlcnNoaXAgbWFuYWdlclxucGFydGljaXBhbnQgU0wgYXMgU2hhcmQgTGVhZGVyJ3M8YnIvPk1lbWJlcnNoaXAgbWFuYWdlclxucGFydGljaXBhbnQgU0YgYXMgU2hhcmQgRm9sbG93ZXI8YnIvPk1lbWJlcnNoaXAgbWFuYWdlclxuU0wtKUNNOiBSZWdpc3RlciBzaGFyZCBsZWFkZXI8YnIvPmFuZCBjb25uZWN0IGZvciB1cGRhdGVzXG5Mb29wXG5DTS0pU0w6IFVwZGF0ZSBzaGFyZCBsZWFkZXIgZW5kIHBvaW50XG5lbmRcblNGLSlDTTogQ29ubmVjdCBzaGFyZCBmb2xsb3dlciBmb3IgdXBkYXRlc1xuTG9vcFxuQ00tKVNGOiBVcGRhdGUgc2hhcmQgbGVhZGVyIGVuZCBwb2ludFxuZW5kIiwibWVybWFpZCI6eyJ0aGVtZSI6Im5ldXRyYWwifX0&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The endpoint that is registered is a gRPC or a RSocket endpoint address. 
+There will be a way to send messages to a sub-component that is contained in the shard. Each shard is expected to be uniform and consistent hashing is used to locate a specific key. This key will be the tenant name, namespace name or topic name in the case of tenant inventory, namespace inventory or topic inventory components. The topic name is also the key for the topic controller.&lt;/p&gt;
+
+&lt;h2 id=&quot;summary&quot;&gt;Summary&lt;/h2&gt;
+
+&lt;p&gt;This blog post describes the components and interactions participating in the topic lookup and assignment flow.&lt;br /&gt;
+There are a lot of small details that will need to be addressed on the way to implementing this solution. 
+Each sub-component interaction procotol will be specified in detail after there’s some feedback from proof-of-concept implementation that is ongoing.&lt;/p&gt;</content><author><name></name></author><category term="pulsar" /><category term="pulsar-ng" /><summary type="html">Context</summary></entry><entry><title type="html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 3</title><link href="https://codingthestreams.com/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html" rel="alternate" type="text/html" title="Rearchitecting Apache Pulsar to handle 100 million topics, Part 3" /><published>2022-11-28T15:31:07+00:00</published><updated>2022-11-28T15:31:07+00:00</updated><id>https://codingthestreams.com/pulsar/2022/11/28/rearchitecting-pulsar-part-3</id><content type="html" xml:base="https://codingthestreams.com/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html">&lt;h2 id=&quot;context&quot;&gt;Context&lt;/h2&gt;
+
+&lt;p&gt;Welcome to continue to read about the possible design for rearchitecting Apache Pulsar to handle 100 million topics.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html&quot;&gt;previous blog post explains the context&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;results-from-experimenting-with-apache-ratis-and-the-sharding-model&quot;&gt;Results from experimenting with Apache Ratis and the sharding model&lt;/h2&gt;
+
+&lt;p&gt;The goal of the first set of experiments was about validating the feasibility of Apache Ratis for the “metadata shard” layer.
+It was mainly about learning the role of distributed consensus for ensuring strong consistency and learning about the implementation tradeoffs and limitations.&lt;/p&gt;
+
+&lt;p&gt;There was a goal to demonstrate the creation of 100000 topics across 5 shards. This was more like a simulation and it didn’t follow the Pulsar model closely since the main goal was to learn about the characteristics and practical details of implementing the metadata layer with an event driven approach.&lt;/p&gt;
+
+&lt;p&gt;The first experiment with Apache Ratis was completed and the code is available in https://github.com/lhotari/pulsar-ng-experiment-1 .&lt;/p&gt;
+
+&lt;h3 id=&quot;performance-in-local-tests&quot;&gt;Performance in local tests&lt;/h3&gt;
+
+&lt;p&gt;The latency of adding a new entry to the Raft log is around 2-3 milliseconds. The throughput of about 300 to 500 ops/second is significantly lower than the &lt;a href=&quot;https://www.slideshare.net/Hadoop_Summit/high-throughput-data-replication-over-raft/30&quot;&gt;10000 IOPS mentioned in a slide deck&lt;/a&gt;. Perhaps 10000 IOPS is across multiple Raft groups?
+With batching, the latency stays fairly low when increasing the batch size. Adding 100000 topics in the experiment completes in a few seconds when using batching across 5 shards. 
+The throughput could also be increased with pipelining, by having multiple requests in flight at a time. This hasn’t been done in the experiment.&lt;/p&gt;
+
+&lt;h2 id=&quot;next-experiments--milestones-on-the-way-toward&quot;&gt;Next experiments / milestones on the way toward&lt;/h2&gt;
+
+&lt;p&gt;The main goal is to integrate the new architecture to real Pulsar broker so that we can learn about the gaps in the solution.
+This is about following &lt;a href=&quot;https://wiki.c2.com/?WalkingSkeleton&quot;&gt;“walking skeleton”&lt;/a&gt; and &lt;a href=&quot;https://wiki.c2.com/?TracerBullets&quot;&gt;“tracer bullets”&lt;/a&gt; development strategies to kick start development and let the feedback guide further development.
+The main focus would be on the “happy path” when implementing the walking skeleton.&lt;/p&gt;
+
+&lt;h3 id=&quot;minimal-implementation-to-integrate-the-new-metadata-layer-to-pulsar&quot;&gt;Minimal implementation to integrate the new metadata layer to Pulsar&lt;/h3&gt;
+
+&lt;p&gt;In the new architecture, the lookup and admin layer are separated from the brokers. 
+One possible way to start moving forward is to start the “lookup component” based on pulsar-discovery component which was removed by &lt;a href=&quot;https://github.com/apache/pulsar/pull/12119&quot;&gt;PR #12119&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The Pulsar documentation contains a description of the &lt;a href=&quot;https://pulsar.apache.org/docs/2.10.x/developing-binary-protocol#topic-lookup&quot;&gt;topic lookup&lt;/a&gt;. There’s no need to modify the existing binary protocol to support the new architecture.
+It’s possible that there’s no need to have a separate redirect step in the lookup.&lt;/p&gt;
+
+&lt;p&gt;Here are some on the essential use cases to support for the admin layer and the lookups.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Minimal Admin API implementation against the new metadata layer
+    &lt;ul&gt;
+      &lt;li&gt;Create, delete, list tenants&lt;/li&gt;
+      &lt;li&gt;Create, delete, list namespaces&lt;/li&gt;
+      &lt;li&gt;Create, delete, list topics&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;Minimal topic lookup layer so that a Pulsar client can perform lookups
+    &lt;ul&gt;
+      &lt;li&gt;In the new architecture, the topic lookup will trigger the topic assignment.
+        &lt;ul&gt;
+          &lt;li&gt;Lookup is part of the “topic assignment flow”&lt;/li&gt;
+        &lt;/ul&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;What do we mean with a “flow”? This is some type of end-to-end usage flow. Externally, the topic lookup flow is visible to the client application. Internally there’s a topic assignment flow that must be implemented.
+When focusing on the flow, we are also following the principle of “form follows function”.&lt;/p&gt;
+
+&lt;h3 id=&quot;topic-assignment-flow&quot;&gt;Topic assignment flow&lt;/h3&gt;
+
+&lt;p&gt;As part of the topic lookup flow, the topic will get assigned to a particular broker.&lt;br /&gt;
+It will be necessary to describe the components and the interactions in the assignment flow.&lt;/p&gt;
+
+&lt;h3 id=&quot;topic-handover-flow&quot;&gt;Topic handover flow&lt;/h3&gt;
+
+&lt;p&gt;One of the main reasons for the new architecture is to support per-topic state so that topic unloading can be handled in a way where the topic is handed over from one broker to another in a seamless way.
+This is another flow to start working on together with the topic assignment flow.&lt;/p&gt;
+
+&lt;h2 id=&quot;summary&quot;&gt;Summary&lt;/h2&gt;
+
+&lt;p&gt;This blog post was a short update on the experiment with Ratis and it explains the high level plan forward.
+Future blog posts in this series will provide more clarity and details.&lt;/p&gt;</content><author><name></name></author><category term="pulsar" /><category term="pulsar-ng" /><summary type="html">Context</summary></entry><entry><title type="html">All your systems will become safety critical</title><link href="https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail.html" rel="alternate" type="text/html" title="All your systems will become safety critical" /><published>2022-11-02T09:45:48+00:00</published><updated>2022-11-02T09:45:48+00:00</updated><id>https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail</id><content type="html" xml:base="https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail.html">&lt;p&gt;“All your systems will become safety critical” is what Richard I. Cook says in his presentation &lt;a href=&quot;https://www.youtube.com/watch?v=PGLYEDpNu60&amp;amp;t=2m4s&quot;&gt;“Resilience In Complex Adaptive Systems” at 2:28, “The future is safety”&lt;/a&gt;. This is why it’s important to learn about resilience engineering.&lt;/p&gt;
+
+&lt;p&gt;One of the best resources on the topic is to read about the work by Richard I. Cook.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://biologicalsciences.uchicago.edu/news/features/richard-cook-obituary&quot;&gt;Dr. Richard I. Cook (1953 – August 31, 2022)&lt;/a&gt; was a system safety researcher, physician, anesthesiologist, university professor, and software engineer. Cook did research in safety, incident analysis, cognitive systems engineering, and resilience engineering across a number of fields, including critical care medicine, aviation, air traffic control, space operations, semiconductor manufacturing, and software services.
+Richard I. Cook passed away on August 31, 2022. RIP.&lt;/p&gt;
+
+&lt;h3 id=&quot;resources-about-how-complex-systems-fail&quot;&gt;Resources about “How Complex Systems Fail”&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Wikipedia page &lt;a href=&quot;https://en.wikipedia.org/wiki/Richard_Cook_(safety_researcher)&quot;&gt;“Richard Cook (safety researcher)”&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://www.adaptivecapacitylabs.com/HowComplexSystemsFail.pdf&quot;&gt;Article “How Complex Systems Fail”&lt;/a&gt;
+    &lt;ul&gt;
+      &lt;li&gt;&lt;a href=&quot;https://blog.acolyer.org/2016/02/10/how-complex-systems-fail/&quot;&gt;“the morning paper” commentary about this paper.&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://www.youtube.com/watch?v=2S0k12uZR14&quot;&gt;Velocity 2012: Richard Cook, “How Complex Systems Fail” - YouTube&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://www.youtube.com/watch?v=PGLYEDpNu60&quot;&gt;Velocity 2013: Richard Cook, “Resilience In Complex Adaptive Systems” - YouTube&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://www.oreilly.com/content/situation-normal-all-fouled-up/&quot;&gt;Velocity conf 2016 keynote: Situation normal: All fouled up&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;resources-about-applying-how-complex-systems-fail-to-devops&quot;&gt;Resources about applying “How Complex Systems Fail” to DevOps&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;John Allspaw blog posts:
+    &lt;ul&gt;
+      &lt;li&gt;&lt;a href=&quot;https://www.kitchensoap.com/2009/11/12/how-complex-systems-fail-a-webops-perspective/&quot;&gt;2009-11-12 How Complex Systems Fail: A WebOps Perspective&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;https://www.kitchensoap.com/2011/04/07/resilience-engineering-part-i/&quot;&gt;2011-04-07 Resilience Engineering: Part I&lt;/a&gt;&lt;/li&gt;
+      &lt;li&gt;&lt;a href=&quot;https://www.kitchensoap.com/2012/06/18/resilience-engineering-part-ii-lenses/&quot;&gt;2012-06-18 Resilience Engineering: Pair II: Lenses&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://www.youtube.com/watch?v=gy2lTFD4560&quot;&gt;Velocity Europe, John Allspaw, “Anticipation: What Could Possibly Go Wrong?”&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;more-resources-about-resilience-engineering&quot;&gt;More resources about Resilience engineering&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;a href=&quot;https://github.com/lorin/resilience-engineering&quot;&gt;Resilience engineering papers&lt;/a&gt;
+    &lt;ul&gt;
+      &lt;li&gt;&lt;a href=&quot;https://github.com/lorin/resilience-engineering/blob/master/intro.md&quot;&gt;Resilience engineering: Where do I start?&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://awesome-safety-critical.readthedocs.io/en/latest/index.html&quot;&gt;Awesome Safety Critical&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;applying-how-complex-systems-fail-to-rearchitecting-apache-pulsar&quot;&gt;Applying “How Complex Systems Fail” to rearchitecting Apache Pulsar&lt;/h3&gt;
+
+&lt;p&gt;This is something that I’m working on. The design presented in &lt;a href=&quot;/pulsar/2022/10/21/possible-high-level-architecture.html&quot;&gt;“Rearchitecting Apache Pulsar to handle 100 million topics, Part 1”&lt;/a&gt; and &lt;a href=&quot;/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html&quot;&gt;“Rearchitecting Apache Pulsar to handle 100 million topics, Part 2”&lt;/a&gt; already contain many elements that are influenced by the principles of resilience engineering. Continuing to improve in this area is one of my goals.&lt;/p&gt;
+
+&lt;p&gt;One of the main motivations for me in applying resilience engineering to Apache Pulsar is that I believe what Richard Cook explains in the presentation &lt;a href=&quot;https://www.youtube.com/watch?v=PGLYEDpNu60&amp;amp;t=2m4s&quot;&gt;“Resilience In Complex Adaptive Systems” at 2:28, “The future is safety”&lt;/a&gt;. Richard Cook makes the claim that all systems will become safety critical systems.&lt;/p&gt;
+
+&lt;p&gt;A system like “Apache Pulsar” is critical infrastructure that many other systems rely on. Let’s say that “Apache Pulsar” is used as the communications backbone for an IoT system. In IoT, there are use cases where IoT systems are used for implementing panic button backends, for example used by elderly people. If the backend system is not available when the panic button is pressed in an emergency, that could be a life critical outage. Many IoT systems have already become safety critical systems. In my opinion, relying on “Apache Pulsar” alone for messaging in critical systems is not sufficient preparation and design. For example, the blog post &lt;a href=&quot;/pulsar/2022/10/14/pulsars-promise.html&quot;&gt;“Pulsar’s high availability promise and its blind spot”&lt;/a&gt; explains some details about the high availability promise.&lt;/p&gt;
+
+&lt;p&gt;Building safety critical systems that rely on messaging would require much more focus on resilience and reliability patterns for ensuring end-to-end service. It is not sufficient to rely on Apache Pulsar for messaging alone. However, since all systems will become safety critical systems in the future, how do we improve Apache Pulsar in this area?&lt;/p&gt;
+
+&lt;p&gt;The mistake in building safety critical systems is to trust any intermediate component between endpoints. This is a true dilemma with message brokers such as Apache Pulsar. This takes us to another topic which is the &lt;a href=&quot;https://en.wikipedia.org/wiki/End-to-end_principle&quot;&gt;“End-to-end principle”&lt;/a&gt;. You can read more about that &lt;a href=&quot;https://blog.acolyer.org/2014/11/14/end-to-end-arguments-in-system-design/&quot;&gt;in the commentary of “End-to-End Arguments in System Design” by “the morning paper”&lt;/a&gt;. 
+To be continued in another blog post in the future.&lt;/p&gt;</content><author><name></name></author><category term="til" /><category term="availability" /><summary type="html">“All your systems will become safety critical” is what Richard I. Cook says in his presentation “Resilience In Complex Adaptive Systems” at 2:28, “The future is safety”. This is why it’s important to learn about resilience engineering.</summary></entry><entry><title type="html">TIL about Distributed Consensus and Systems design</title><link href="https://codingthestreams.com/til/2022/10/25/til-distributed-consensus.html" rel="alternate" type="text/html" title="TIL about Distributed Consensus and Systems design" /><published>2022-10-25T12:50:12+00:00</published><updated>2022-10-25T12:50:12+00:00</updated><id>https://codingthestreams.com/til/2022/10/25/til-distributed-consensus</id><content type="html" xml:base="https://codingthestreams.com/til/2022/10/25/til-distributed-consensus.html">&lt;h2 id=&quot;context&quot;&gt;Context&lt;/h2&gt;
+
+&lt;p&gt;I’m working on experimentation for finding ways how to deal with distributed consensus in the experiment I’m doing for &lt;a href=&quot;/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html&quot;&gt;rearchitecting Apache Pulsar for 100 million topics&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;today-i-learned-til&quot;&gt;Today I Learned (TIL)&lt;/h2&gt;
+
+&lt;h3 id=&quot;til-about-distributed-consensus&quot;&gt;TIL about distributed consensus&lt;/h3&gt;
+
+&lt;p&gt;The Google SRE book has a very good overview of distributed consensus in &lt;a href=&quot;https://sre.google/sre-book/managing-critical-state/&quot;&gt;“Chapter 23 - Managing Critical State: Distributed Consensus for Reliability”, written by Laura Nolan, edited by Tim Harvey&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;It contains an in-depth description about algorithms, protocols and implementations and the different tradeoffs, challenges and optimizations for addressing challenges. For example, throughput and latency can be challenges in distributed consensus. 
+The article describes various ways how this has been optimized in some distributed consensus implementations.&lt;/p&gt;
+
+&lt;h3 id=&quot;til-about-distributed-systems-design&quot;&gt;TIL about distributed systems design&lt;/h3&gt;
+
+&lt;p&gt;At InfoQ, there’s a recorded presentation &lt;a href=&quot;https://www.infoq.com/presentations/complexity-distributed-behavior/&quot;&gt;“Essential Complexity in Systems Architecture” by Laura Nolan&lt;/a&gt; which is the author of the book chapter.
+It provides interesting views of how distributed systems could be designed. The author believes that there are two major styles for distributed systems architecture: command &amp;amp; control and peer-to-peer. Google Bigtable and Dynamo are compared. 
+The presentation brought up important aspects of maintainability and operability and how the system architecture design could impact this be improving the understandability and predictability of the system.&lt;/p&gt;
+
+&lt;p&gt;Referenced papers:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;&lt;a href=&quot;https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/44686.pdf&quot;&gt;Google Photon paper&lt;/a&gt;
+    &lt;ul&gt;
+      &lt;li&gt;&lt;a href=&quot;https://blog.acolyer.org/2014/12/04/photon-fault-tolerant-and-scalable-joining-of-continuous-data-streams/&quot;&gt;Commentary of Photon on “the morning paper”&lt;/a&gt;&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://static.googleusercontent.com/media/research.google.com/en//archive/bigtable-osdi06.pdf&quot;&gt;Google Bigtable paper&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf&quot;&gt;Amazon Dynamo paper&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;More distributed consensus papers, compiled by Heidi Howard:
+&lt;a href=&quot;https://github.com/heidihoward/distributed-consensus-reading-list&quot;&gt;Distributed Consensus Reading List&lt;/a&gt;&lt;/p&gt;
+
+&lt;p&gt;“the morning paper” 10 part series about consensus and replication, by Adrian Colyer:
+&lt;a href=&quot;https://blog.acolyer.org/2015/03/01/cant-we-all-just-agree/&quot;&gt;Can’t we all just agree?&lt;/a&gt;&lt;/p&gt;
+
+&lt;h3 id=&quot;til-about-herd-effect-with-leader-election&quot;&gt;TIL about herd effect with leader election&lt;/h3&gt;
+
+&lt;p&gt;I was reading papers about distributed consensus and replication in the “the morning paper”. There’s also a few blog posts about Zookeeper, for example https://blog.acolyer.org/2015/01/27/zookeeper-wait-free-coordination-for-internet-scale-systems/ .&lt;/p&gt;
+
+&lt;p&gt;What caught my eye was the way leader election was described:
+“The leader election algorithm is not actually shown in the paper, but you can find it at the &lt;a href=&quot;https://zookeeper.apache.org/doc/r3.8.0/recipes.html#sc_leaderElection&quot;&gt;ZooKeeper Recipes and Solutions page&lt;/a&gt;. Since it’s a commonly cited use case for ZooKeeper I give a quick outline here. The basic idea is similar to the lock use case: create a parent node ‘/election’, and then have each candidate create an ephemeral sequential child node. The node that gets the lowest sequence id wins and is the new leader. You also need to watch the leader so as to be able to elect a new one if it fails – details for doing this without causing a herd effect are given at the referenced page, the same ‘watch the next lowest sequence id node’ idea as we saw above is used.”&lt;/p&gt;
+
+&lt;p&gt;I compared this description to the implementation we have in Pulsar:
+&lt;a href=&quot;https://github.com/apache/pulsar/blob/82237d3684fe506bcb6426b3b23f413422e6e4fb/pulsar-metadata/src/main/java/org/apache/pulsar/metadata/coordination/impl/LeaderElectionImpl.java#L175&quot;&gt;pulsar-metadata/src/main/java/org/apache/pulsar/metadata/coordination/impl/LeaderElectionImpl.java&lt;/a&gt;&lt;/p&gt;
+
+&lt;p&gt;I don’t see that there isn’t any mitigation for the herd effect in Pulsar’s LeaderElectionImpl. I guess the herd effect will amplify with the growth of the participants in the leader election since when the leader is lost. With a large number of brokers this is start to matter. In general, this seems to be a minor issue for scalability compared to the fact that &lt;a href=&quot;https://github.com/apache/pulsar/pull/11198&quot;&gt;all Zookeeper changes are broadcasted to all nodes in Pulsar&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;til-about-availability&quot;&gt;TIL about availability&lt;/h3&gt;
+
+&lt;p&gt;While browsing “the morning paper” blog, my eye caught on &lt;a href=&quot;https://blog.acolyer.org/2020/02/26/meaningful-availability/&quot;&gt;“Meaningful availability”&lt;/a&gt; blog post.&lt;/p&gt;
+
+&lt;p&gt;The blog post explains that “count-based” availability is a common approach for addressing the issues around partial failures in a system. It also lists some problems with count based availability metrics. There’s also details around different ways to measure availability from individual’s user’s perspective.&lt;/p&gt;
+
+&lt;p&gt;I was thinking about this in the blog post &lt;a href=&quot;/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html&quot;&gt;“How do you define high availability in your event driven system?”&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;til-about-apache-ratis&quot;&gt;TIL about Apache Ratis&lt;/h3&gt;
+
+&lt;p&gt;I started looking into &lt;a href=&quot;https://ratis.apache.org/&quot;&gt;Apache Ratis&lt;/a&gt; which is an open source Java implemention for Raft consensus protocol. 
+In my previous blog post &lt;a href=&quot;/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html#experimenting-with-apache-ratis-and-the-sharding-model&quot;&gt;I shared the goal that I have with experimenting with Ratis&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;As the first step, I am looking for inspiration in the LogService implementation that is part of Ratis examples. The source code for ratis-logservice is available at &lt;a href=&quot;https://github.com/apache/ratis-hadoop-projects/tree/main/ratis-logservice&quot;&gt;https://github.com/apache/ratis-hadoop-projects/tree/main/ratis-logservice&lt;/a&gt;. It’s a distributed log implemented on top of Apache Ratis.
+I’m learning about the Ratis APIs and how something like the LogService could be implemented with Ratis. Instead of using and copying LogService as-is, I’m planning to implement the prototype for the “topic inventory” service and “metadata shard” (concepts explained in the previous blog post) in a minimalistic way so that I learn the use of Ratis from the basics.&lt;/p&gt;
+
+&lt;h3 id=&quot;whats-next&quot;&gt;What’s next&lt;/h3&gt;
+
+&lt;p&gt;Tomorrow I’ll continue learning and experimenting with Apache Ratis. I’ll keep on sharing what I learn on the way. Stay tuned!&lt;/p&gt;</content><author><name></name></author><category term="til" /><category term="availability" /><summary type="html">Context</summary></entry><entry><title type="html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 2</title><link href="https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html" rel="alternate" type="text/html" title="Rearchitecting Apache Pulsar to handle 100 million topics, Part 2" /><published>2022-10-24T15:28:00+00:00</published><updated>2022-10-24T15:28:00+00:00</updated><id>https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2</id><content type="html" xml:base="https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">&lt;h2 id=&quot;context&quot;&gt;Context&lt;/h2&gt;
+
+&lt;p&gt;Welcome to read about the possible design for rearchitecting Apache Pulsar to handle 100 million topics.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;/pulsar/2022/10/21/possible-high-level-architecture.html&quot;&gt;previous blog post explains the context&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;This blog post continues on more details and defines the scope of the first experiment.&lt;/p&gt;
+
+&lt;h2 id=&quot;reasons-for-switching-the-pulsar-metadata-storage-model-from-pip-45-to-a-sharded-model&quot;&gt;Reasons for switching the Pulsar metadata storage model from PIP-45 to a sharded model&lt;/h2&gt;
+
+&lt;p&gt;The previous blog post presented a major change for the Apache Pulsar metadata storage. Let’s take a closer look in the reasons to do this.&lt;/p&gt;
+
+&lt;h3 id=&quot;more-observations-about-the-pip-45-metadata-store-abstraction&quot;&gt;More observations about the PIP-45 Metadata Store abstraction&lt;/h3&gt;
+
+&lt;p&gt;Pulsar’s &lt;a href=&quot;https://github.com/apache/pulsar/blob/master/pulsar-metadata/src/main/java/org/apache/pulsar/metadata/api/MetadataStore.java&quot;&gt;MetadataStore&lt;/a&gt; 
+abstraction contains the repository pattern and in addition contains a way to register handlers for notification events and a view to the data that is cached.&lt;/p&gt;
+
+&lt;p&gt;Here’s a compressed list of the methods in the interface:&lt;/p&gt;
+
+&lt;div class=&quot;language-java highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kd&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;interface&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MetadataStore&lt;/span&gt; &lt;span class=&quot;kd&quot;&gt;extends&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;AutoCloseable&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;CompletableFuture&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Optional&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;GetResult&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;get&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;path&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;CompletableFuture&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;List&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getChildren&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;path&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;CompletableFuture&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Boolean&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;exists&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;path&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;CompletableFuture&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Stat&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;put&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;path&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;byte&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;value&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Optional&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Long&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;expectedVersion&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;CompletableFuture&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Void&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;delete&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;path&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;Optional&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Long&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;expectedVersion&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;nc&quot;&gt;CompletableFuture&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Void&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;deleteRecursive&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;String&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;path&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;registerListener&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Consumer&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Notification&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;listener&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MetadataCache&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getMetadataCache&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;Class&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clazz&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MetadataCacheConfig&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;cacheConfig&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MetadataCache&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getMetadataCache&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;TypeReference&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;typeRef&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MetadataCacheConfig&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;cacheConfig&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+    &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MetadataCache&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;getMetadataCache&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nc&quot;&gt;MetadataSerde&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;no&quot;&gt;T&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;serde&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;MetadataCacheConfig&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;cacheConfig&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;This is a traditional CRUD interface with additional change notification and caching support.
+The problem with this abstraction is that it’s not optimal for a large scale distributed system such as Pulsar.&lt;/p&gt;
+
+&lt;p&gt;There are several problems:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;lack of support for sharding which is necessary for horizontal scalability.&lt;/li&gt;
+  &lt;li&gt;interface doesn’t cover pagination and more advanced ways to search and list entities. Pagination will be necessary when there’s a large amount of entities.&lt;/li&gt;
+  &lt;li&gt;all changes are broadcasted to all connected clients. This conflicts with scalable design.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The PIP-45 metadata store abstraction cannot be “fixed” or optimized to address the requirements, what there are for Pulsar for metadata handling. The interface is not complete in it’s current form, since adding support for pagination or new features such as renaming of topics would cause large changes. The previous blog post covered possible new features like renaming or moving topics. 
+Kafka is improving in this area with &lt;a href=&quot;https://cwiki.apache.org/confluence/display/KAFKA/KIP-516%3A+Topic+Identifiers&quot;&gt;“KIP-516 Topic Identifiers”&lt;/a&gt;. Pulsar will need to match Kafka also in this area.&lt;/p&gt;
+
+&lt;p&gt;Martin Kleppmann’s &lt;a href=&quot;https://www.confluent.io/stream-processing/&quot;&gt;“Making Sense of Stream Processing”&lt;/a&gt; ebook contains a case study “Web Application Developers Driven to Insanity” (pdf page 50, ebook page 40).
+That is a case study of a web application using traditional CRUD architecture, and it explains the complexity which could arise from having the database as the source of truth.
+This is explained in the chapter called “Using Logs to Build a Solid Data Infrastructure”. Using logs as the source of truth can reduce overall complexity. 
+Event logs as the source of truth is the model that scales well for distributed systems. This is a model that Pulsar should be leveraging internally to reduce complexity and improve reliability.&lt;/p&gt;
+
+&lt;h3 id=&quot;is-the-metadata-shard-presented-in-the-previous-blog-post-like-a-distributed-database-which-uses-raft-such-as-cockroachdb-or-yugabyte&quot;&gt;Is the metadata shard presented in the previous blog post like a distributed database which uses Raft, such as CockroachDB or YugaByte?&lt;/h3&gt;
+
+&lt;p&gt;Yes and no. There are similarities to distributed database design.
+The main difference is the purpose of the component. The Pulsar metadata shard is not a general purpose database. Instead, it’s a deployable Pulsar component that contains multiple software components that handle entities for a specific “shard” in the system.
+The possible software components that run in the “metadata shard”:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;topic shard inventory&lt;/li&gt;
+  &lt;li&gt;tenant shard inventory&lt;/li&gt;
+  &lt;li&gt;namespace shard inventory&lt;/li&gt;
+  &lt;li&gt;topic controller&lt;/li&gt;
+  &lt;li&gt;cluster load manager&lt;/li&gt;
+  &lt;li&gt;broker load manager&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The components running in each shard will be able to act on local state. Raft will enable low latency replication and high availability of this state.
+The assumption is that modeling and building stateful components for Pulsar in this way will reduce complexity and be a more efficient and effective way
+to achieve the quality requirements of low cost, high performance, low latency, high availability and reliability.&lt;/p&gt;
+
+&lt;p&gt;Instead of thinking of a database, it is better to think about “state”. What is the state that is stored in Pulsar, and what state transitions are there?
+The source of truth are the events stored in the log. The Raft solution is used to replicate the event logs. Raft’s replication model is based on event logs.&lt;/p&gt;
+
+&lt;p&gt;Raft is not the only solution to replicate state in the solution. Event logs will be available for consuming and the state of consumer position can be used to achieve consistency after state changes. This was explained partially in the previous blog post.&lt;/p&gt;
+
+&lt;h3 id=&quot;benefits-of-event-logs-as-the-source-of-truth-for-pulsar-metadata&quot;&gt;Benefits of event logs as the source of truth for Pulsar metadata&lt;/h3&gt;
+
+&lt;p&gt;The benefit of this approach is that it’s possible to achieve:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;data locality and data consistency&lt;/li&gt;
+  &lt;li&gt;replicated, high available state machines&lt;/li&gt;
+  &lt;li&gt;sharding and scalability&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This type of architecture will follow “single writer principle”.&lt;/p&gt;
+
+&lt;p&gt;One inspiration for this is the &lt;a href=&quot;http://curtclifton.net/papers/MoseleyMarks06a.pdf&quot;&gt;“Out of the tar pit” paper&lt;/a&gt;(&lt;a href=&quot;https://blog.acolyer.org/2015/03/20/out-of-the-tar-pit/&quot;&gt;“Out of the tar pit” commentary in the “the morning paper” blog&lt;/a&gt;).&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;The biggest problem in the development and maintenance of large-scale software systems is complexity — large systems are hard to understand. We believe that the major
+contributor to this complexity in many systems is the handling of state and the burden that this adds when trying to analyse and reason about the system.&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;The assumption is that the overall complexity of the system can be reduced by reducing shared mutable state in the system.&lt;/p&gt;
+
+&lt;h2 id=&quot;scope-for-the-first-experiment&quot;&gt;Scope for the first experiment&lt;/h2&gt;
+
+&lt;h3 id=&quot;experimenting-with-apache-ratis-and-the-sharding-model&quot;&gt;Experimenting with Apache Ratis and the sharding model&lt;/h3&gt;
+
+&lt;p&gt;The goal of the first set of experiments would be in validating the feasibility of Apache Ratis for the “metadata shard” layer and starting to sketch out the protocol between the 
+Lookup &amp;amp; Admin layer components. The protocol between “metadata shard” layer components and the broker can be postponed.&lt;/p&gt;
+
+&lt;p&gt;It should be possible to demonstrate the creation of 100000 topics across 5 shards. The first experiment doesn’t necessarily have to follow the Pulsar model closely since the main goal is to get started. The experiment could be used to estimate throughput and latency of creating 1 million entities, 10 million entities and so on.&lt;/p&gt;
+
+&lt;p&gt;The upcoming blog posts will cover the experimentation progress and any topics that come up on the way.&lt;/p&gt;
+
+&lt;h2 id=&quot;summary&quot;&gt;Summary&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;One reason to switch from Pulsar PIP-45 design to an event sourced model is that the assumption is that this results in less complexity and a more reasonable approach for meeting the scalability and reliability requirements together with the new features that will be needed in the future (such as topic renaming/moving support).&lt;/li&gt;
+  &lt;li&gt;The “metadata shard” design is an approach where there’s focus on state management and replication of the state across the distributed components.
+    &lt;ul&gt;
+      &lt;li&gt;Metadata isn’t handled as a separate concern outside of the system. It’s handled inside the system.&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;The scope of the first experiment is to experiment with Apache Ratis and the sharding model.&lt;/li&gt;
+&lt;/ul&gt;</content><author><name></name></author><category term="pulsar" /><category term="pulsar-ng" /><summary type="html">Context</summary></entry><entry><title type="html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 1</title><link href="https://codingthestreams.com/pulsar/2022/10/21/possible-high-level-architecture.html" rel="alternate" type="text/html" title="Rearchitecting Apache Pulsar to handle 100 million topics, Part 1" /><published>2022-10-21T17:23:56+00:00</published><updated>2022-10-21T17:23:56+00:00</updated><id>https://codingthestreams.com/pulsar/2022/10/21/possible-high-level-architecture</id><content type="html" xml:base="https://codingthestreams.com/pulsar/2022/10/21/possible-high-level-architecture.html">&lt;h2 id=&quot;context&quot;&gt;Context&lt;/h2&gt;
+
+&lt;p&gt;Welcome to read about the possible design for rearchitecting Apache Pulsar to handle 100 million topics.&lt;/p&gt;
+
+&lt;p&gt;The previous blog posts in this series have been about stating the problem.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;a href=&quot;/pulsar/2022/10/18/view-of-pulsar-metadata-store.html&quot;&gt;A critical view of Pulsar’s Metadata store abstraction&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html&quot;&gt;Pulsar’s namespace bundle centric architecture limits future options&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;/pulsar/2022/10/14/pulsars-promise.html&quot;&gt;Pulsar’s high availability promise and its blind spot&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Pulsar’s promise of high availability with predicable read and write latency is vague. In reality, there’s a blind spot in Pulsar in the way how topics are moved from one broker to another during Pulsar broker load balancing and graceful shutdown of a broker. This causes unpredictable read and write latency, which conflicts with the promise.&lt;/p&gt;
+
+&lt;p&gt;It is disputable that Pulsar supports &lt;a href=&quot;https://github.com/apache/pulsar#main-features&quot;&gt;“millions of independent topics and millions of messages published per second”&lt;/a&gt;. Achieving “millions of independent topics” is not documented in the project, and there aren’t public demonstrations of this. One of the challenges are the scalability limits with Pulsar metadata handling.
+The goal of PIP-45 was to be able to replace Zookeeper with another metadata and coordination backend and increase the limits. This attempt has failed to deliver such results. PIP-45 has delivered other significant improvements, but it hasn’t been effective in addressing the scalability problem.&lt;/p&gt;
+
+&lt;h2 id=&quot;design-approach&quot;&gt;Design approach&lt;/h2&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;“We cannot solve our problems with the same thinking we used when we created them.”&lt;br /&gt;
+— &lt;cite&gt;Albert Einstein&lt;/cite&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;In the mailing list, there was a lot of discussion that we must be careful to not break compatibility with existing Pulsar client. That makes sense and it is very important to support existing Pulsar clients. If we’d design a system that breaks compatibility, it wouldn’t be called Pulsar anymore.&lt;/p&gt;
+
+&lt;p&gt;I think that it’s a limiting factor if we are too cautious to remove and replace components and solutions from the existing Pulsar architecture. By now, improving Pulsar has happened incrementally without removing features or making significant changes to how Pulsar works under the covers.&lt;/p&gt;
+
+&lt;p&gt;My goal is to teach about the possibilities that there are for solving the problems stated in the previous blog posts. I don’t have a solution available that will be ready. Design is emergent and it evolves. We can make it better over time. The whole Pulsar community is needed in making the possibilities an actual reality. This blog post is just the beginning.&lt;/p&gt;
+
+&lt;h2 id=&quot;proof-of-concept-design-goal-100-million-topic-inventory-with-high-availability&quot;&gt;Proof-of-concept design goal: 100 million topic inventory with high availability&lt;/h2&gt;
+
+&lt;p&gt;I have a goal to demonstrate that it’s possible to have a Pulsar cluster with 100 million topic inventory. The proof-of-concept might have gaps, and the goal isn’t to show a perfect system. The PoC will also be performed with limited scope. For example, I don’t have the goal to demonstrate with 100 million active topics, since the PoC could be very expensive and complex to perform with 100 million active topics. There will be 100 million topics in total, and a subset will be active. That should be sufficient for the PoC.&lt;/p&gt;
+
+&lt;p&gt;There will also be multiple phases in the PoC. Optimally, there would also be proof that the availability issue with topic unload / moving across brokers can be solved together with addressing the scalability problem. It’s always possible that the PoC fails because of some obstacle. If it fails, let’s lower the bar or find ways around the challenges. I’m confident that we will be able to reach the goals with the architecture models that I’m presenting here. This isn’t a complete explanation and there will be more blog posts on the way to cover all gaps. The 100 million topic inventory goal is useful so that we design for the future and go way beyond what is possible in today’s Pulsar architecture.&lt;/p&gt;
+
+&lt;h2 id=&quot;high-level-solution&quot;&gt;High level solution&lt;/h2&gt;
+
+&lt;h3 id=&quot;form-follows-function&quot;&gt;Form follows function&lt;/h3&gt;
+
+&lt;p&gt;A solution describes the intended functionality, behavior and the architecture that realizes this. It is more than just this, since architecture is about describing the decomposition into entities, describing the abstractions and defining the boundaries of the system.&lt;/p&gt;
+
+&lt;p&gt;There are multiple schools of software architecture design. I tend to follow an approach where one of the guiding principles of design is “form follows function”.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Form_follows_function&quot;&gt;“Form follows function”&lt;/a&gt; has the roots in building architecture (&lt;a href=&quot;https://en.wikipedia.org/wiki/Functionalism_(architecture)&quot;&gt;functionalism&lt;/a&gt;, to be more specific).&lt;/p&gt;
+
+&lt;p&gt;For me in software, this principle means that design should focus on the core essence of what the system should achieve, the intended function of the system. The form, the structure and architecture, should emerge incrementally while the participants designing, delivering and using the system learn and understand more about the function and true purpose of the system over time. It is not about big upfront design. Let’s say that there should be just enough architecture at each iteration when developing a system. Once we understand “function”, we can come up with the “form” for delivering the functionality. This cycle is iterative and incremental, where the feedback from implementation, operations and use of the system guides the further design and formation of the architecture.&lt;/p&gt;
+
+&lt;p&gt;The “function” in “form follows function” for me is more than just functionality, it’s also about the quality aspects of the system. I work for DataStax leading Streaming Customer Reliability Engineering. Our mission statement is “We serve real-time applications with an open data stack that just works”. For database, streaming and messaging systems, the “just works” part is the essential function. It’s a feature. Quality must be built-in with in the “form” too. It cannot be slapped on afterwards in some sort of stabilization phase. There’s a relation between the “form” and the “function”. The “form” of a system cannot be changed in a bug fix. I hope it could, but &lt;a href=&quot;https://sre.google/sre-book/introduction/&quot;&gt;hope is not a strategy as we have learned in the Site Reliability Engineering book&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;We need more holistic approaches to address the scalability and availability problems in Pulsar so that we can reach the level with Pulsar that it “just works”. I have clarified the scalability and availability challenges in the previous blog posts. The goal of this blog post series isn’t to solve the problems. It is to teach about the possibilities. Together we can make the leap from current state to the state that is possible. I hope you also get excited about these possibilities and join the Apache Pulsar community to make this a reality.&lt;/p&gt;
+
+&lt;h3 id=&quot;the-concept-of-pulsar&quot;&gt;The concept of Pulsar&lt;/h3&gt;
+
+&lt;p&gt;This is one way to explain the essential concept of Pulsar in one sentence:
+“Apache Pulsar is a highly available, distributed messaging system that provides guarantees of no message loss and strong message ordering with predictable read and write latency.“&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://github.com/apache/pulsar#main-features&quot;&gt;Pulsar’s README file lists the main features&lt;/a&gt;:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Horizontally scalable (Millions of independent topics and millions of messages published per second)&lt;/li&gt;
+  &lt;li&gt;Strong ordering and consistency guarantees&lt;/li&gt;
+  &lt;li&gt;Low latency durable storage&lt;/li&gt;
+  &lt;li&gt;Topic and queue semantics&lt;/li&gt;
+  &lt;li&gt;Load balancer&lt;/li&gt;
+  &lt;li&gt;Designed for being deployed as a hosted service:
+    &lt;ul&gt;
+      &lt;li&gt;Multi-tenant&lt;/li&gt;
+      &lt;li&gt;Authentication&lt;/li&gt;
+      &lt;li&gt;Authorization&lt;/li&gt;
+      &lt;li&gt;Quotas&lt;/li&gt;
+      &lt;li&gt;Support mixing very different workloads&lt;/li&gt;
+      &lt;li&gt;Optional hardware isolation&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;Keeps track of consumer cursor position&lt;/li&gt;
+  &lt;li&gt;REST API for provisioning, admin and stats&lt;/li&gt;
+  &lt;li&gt;Geo replication&lt;/li&gt;
+  &lt;li&gt;Transparent handling of partitioned topics&lt;/li&gt;
+  &lt;li&gt;Transparent batching of messages&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;One could argue that some of the listed features aren’t really features, but implementation details. This isn’t perfect, but it gives a good high level understanding of what is the core of Pulsar.&lt;/p&gt;
+
+&lt;p&gt;Expanding our first sentence with a clarifying sentence about the additional functionality that are part of the core Pulsar concept could help us find a way to capture the essential.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Apache Pulsar is a highly available, distributed messaging system that provides guarantees of no message loss and strong message ordering with predictable read and write latency.&lt;/li&gt;
+  &lt;li&gt;The system is horizontally scalable to millions of topics with throughput of millions of messages per second.&lt;/li&gt;
+  &lt;li&gt;It is designed to be deployed as a hosted service with sufficient controls for multitenancy, authentication, authorization, resource quotas and different service levels.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h3 id=&quot;towards-a-possible-high-level-architecture-keeping-load-balancing-and-metadata-functions-together&quot;&gt;Towards a possible high level architecture: keeping load balancing and metadata functions together&lt;/h3&gt;
+
+&lt;p&gt;Instead of rethinking the whole architecture for Pulsar, it’s useful to focus on the Pulsar load balancing and metadata functions. The assumption is that Pulsar load balancing and metadata handling shouldn’t be separated, and there’s a benefit in keeping these together. When explaining the functions, this assumption becomes more credible, although the proof of this is a working system that realizes this type of design.&lt;/p&gt;
+
+&lt;p&gt;Instead of categorizing everything as “metadata”, in the “form follows function” design approach that could be considered as blindness to the actual functionality. That is why we’d better dig into the functions and functionality that “Pulsar load balancing and metadata” is really about.&lt;/p&gt;
+
+&lt;h4 id=&quot;avoiding-analysis-paralysis-accepting-that-this-isnt-complete-and-perfect&quot;&gt;Avoiding analysis paralysis: accepting that this isn’t complete and perfect&lt;/h4&gt;
+
+&lt;p&gt;Optimally, we would spend more time describing the functionality of each part of the core concept of Pulsar. This way we would be understanding what is essential and being able to start thinking of solutions that address this.&lt;/p&gt;
+
+&lt;p&gt;Describing all details that are involved in the design could be a good exercise, but there’s also the risk of getting into &lt;a href=&quot;https://en.wikipedia.org/wiki/Analysis_paralysis&quot;&gt;analysis paralysis&lt;/a&gt; where we don’t know where to start. So let’s get started and accept that we won’t be perfect. Some of the descriptions in this blog post might not be well written and could be expressed in a complicated way. I hope you bear with me. Please provide feedback: questions and suggestions of how this could be all improved.&lt;/p&gt;
+
+&lt;p&gt;A lot of the descriptions expressed in these blog posts aren’t final. We can make changes when we notice that something didn’t make sense after all. Some parts of the blog post are at a very draft level of planning and contain raw ideas that need more work before it makes sense. I’m sharing the ideas since I think that only by sharing progress can be made. You will find mistakes here. This is a raw draft and it’s far from completion. Perhaps this will be good enough for the purpose of teaching about the possibilities?&lt;/p&gt;
+
+&lt;h4 id=&quot;functions-of-pulsar-load-balancing-and-metadata&quot;&gt;Functions of Pulsar load balancing and metadata&lt;/h4&gt;
+
+&lt;p&gt;Metadata related:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Topic inventory&lt;/li&gt;
+  &lt;li&gt;Topic policy&lt;/li&gt;
+  &lt;li&gt;Tenant inventory&lt;/li&gt;
+  &lt;li&gt;Tenant policy&lt;/li&gt;
+  &lt;li&gt;Namespace inventory&lt;/li&gt;
+  &lt;li&gt;Namespace policy&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;At runtime:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Coordination: topic is owned on a single broker a time&lt;/li&gt;
+  &lt;li&gt;Balancing the load across brokers&lt;/li&gt;
+  &lt;li&gt;Fail over for topics when a broker fails&lt;/li&gt;
+  &lt;li&gt;Querying new topics with a regex pattern for multi-topic consumers&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;New functionality that would be needed&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Topic search &amp;amp; pagination&lt;/li&gt;
+  &lt;li&gt;Tenant search &amp;amp; pagination&lt;/li&gt;
+  &lt;li&gt;Namespace search &amp;amp; pagination&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;New functionality that would be nice-to-have&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;Renaming support for topics&lt;/li&gt;
+  &lt;li&gt;Renaming support for tenants&lt;/li&gt;
+  &lt;li&gt;Renaming support for namespaces&lt;/li&gt;
+  &lt;li&gt;Aliases for topics? (like symbolic links). Could be useful with renaming.&lt;/li&gt;
+  &lt;li&gt;Moving topic from namespace to another. Useful for splitting/merging namespaces.&lt;/li&gt;
+  &lt;li&gt;Moving namespace from tenant to another. Useful for splitting/merging tenants.&lt;/li&gt;
+  &lt;li&gt;Additional level of isolation for tenant names in a multi-tenant environment. Tenant names would be unique in the “cloud account” level.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Kafka has &lt;a href=&quot;https://cwiki.apache.org/confluence/display/KAFKA/KIP-516%3A+Topic+Identifiers&quot;&gt;“KIP-516 Topic Identifiers”&lt;/a&gt; to address issues with names used as identifiers. That is preparation for supporting topic renaming.&lt;/p&gt;
+
+&lt;p&gt;There is also functionality that is essential which is related to operating Pulsar. It should be possible to increase the capacity of the Pulsar system seamlessly. There’s also the need to isolate workloads. This is also taken into account when coming up with the “form”, the architecture.&lt;/p&gt;
+
+&lt;h3 id=&quot;high-level-architecture&quot;&gt;High level architecture&lt;/h3&gt;
+
+&lt;p&gt;Here’s a high level deployment view architecture:&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;https://codingthestreams.com/assets/images/pulsar_architecture_with_md_shards.svg&quot; alt=&quot;high level architecture&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;The major change to existing Pulsar architecture is that tenant, namespace and topic level metadata is not stored in Zookeeper.
+There’s a new component container called “metadata shard” which will replace Zookeeper for all tenant, namespace and topic level metadata.&lt;/p&gt;
+
+&lt;p&gt;On top of the metadata layer, there is an admin &amp;amp; lookup layer which would be handling topic lookups. For lookups, this is similar to what was available in Pulsar with the Pulsar discovery component, which could be used to federate multiple Pulsar clusters into one (more details in this &lt;a href=&quot;https://github.com/apache/pulsar/issues/15225&quot;&gt;issue discussion&lt;/a&gt;). In the case where there’s no need to scale beyond one cluster, the admin &amp;amp; lookup layer doesn’t have to be separated. Instead, the brokers of the cluster could serve the role of the admin &amp;amp; lookup layer, as it is done in existing Pulsar brokers architecture.&lt;/p&gt;
+
+&lt;p&gt;One reason to make this change in the architecture is to have a way to scale a broker system seamlessly. Zookeepers will continue to be used for Bookkeeper metadata. The high level architecture doesn’t yet make a decision on whether to store Pulsar Managed ledger metadata to the Metadata shard or to Zookeeper.&lt;/p&gt;
+
+&lt;p&gt;The solution could be expanded to have yet another level of indirection where there would be a possibility to scale beyond a single metadata shard layer. This might be useful in certain cloud provider use cases where stronger forms of isolation are needed because of security or policy reasons.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;https://codingthestreams.com/assets/images/pulsar_architecture_with_more_levels.png&quot; alt=&quot;high level architecture&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;This type of architecture is necessary for large scale cloud service offerings for Apache Pulsar.&lt;/p&gt;
+
+&lt;p&gt;It is out of scope of this blog post how to solve geo-replicated architectures and configurations. The presented high level architecture is expected to cover a specific geographical region where there’s low latency access between nodes. There would be a need to have a high level architecture to replace the existing “global zookeeper” type of configuration recommendations and cover features such as &lt;a href=&quot;https://github.com/apache/pulsar/issues/13728&quot;&gt;“PIP-136: Sync Pulsar policies across multiple clouds”&lt;/a&gt; but implemented with the new metadata architecture. Multi-regional configuration of Pulsar requires functionality which we haven’t been covering in this blog post.&lt;/p&gt;
+
+&lt;h2 id=&quot;metadata-shard&quot;&gt;Metadata shard&lt;/h2&gt;
+
+&lt;p&gt;The metadata shard is a deployable runtime component that could be deployed as a Kubernetes pod within a Kubernetes stateful set or in other types of deployments, it would be a single process.
+The component is stateful from the perspective of containing persistent state that operates as the database for the Metadata. The metadata shard itself contains lower level components which are described later and in upcoming blog posts.&lt;/p&gt;
+
+&lt;h3 id=&quot;storage-model-events-are-the-source-of-truth&quot;&gt;Storage model: Events are the source of truth&lt;/h3&gt;
+
+&lt;p&gt;The high level idea of storing the state is to use an event log which is stored to the filesystem. It would be an event sourced model where the events are the source of truth. Besides the event log, there would be a RocksDB view of the events. There could be indexes in RocksDB to query the read model that is built from the events. In this way, it could be seen as a &lt;a href=&quot;https://en.wikipedia.org/wiki/Command%E2%80%93query_separation&quot;&gt;CQRS&lt;/a&gt; type of solution.&lt;/p&gt;
+
+&lt;p&gt;Each metadata shard would have 3 replicas: 1 leader and 2 followers. This is to ensure high availability in the case of failures and when the system is maintained. Each replica would be put into separate upgrade domains. Raft would be used to replicate the state between the shards. Raft also contains leader election as part of it. Changes would be made on the leader replica for each shard.
+The initial idea is to use &lt;a href=&quot;https://ratis.apache.org/&quot;&gt;Apache Ratis&lt;/a&gt; as the Raft and event log implementation.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&quot;https://codingthestreams.com/assets/images/metadata_shard_raftgroups.svg&quot; alt=&quot;metadata shard raft groups&quot; /&gt;&lt;/p&gt;
+
+&lt;p&gt;A metadata shard is a runtime component containing multiple lower level components:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;topic shard inventory&lt;/li&gt;
+  &lt;li&gt;tenant shard inventory&lt;/li&gt;
+  &lt;li&gt;namespace shard inventory&lt;/li&gt;
+  &lt;li&gt;topic controller&lt;/li&gt;
+  &lt;li&gt;cluster load manager&lt;/li&gt;
+  &lt;li&gt;broker load manager&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The inventory components provide RPC services that handle &lt;em&gt;commands&lt;/em&gt; for creating, updating and deleting topics, tenants and namespaces.
+The component will emit an event and persist it. Since it’s an event source model, the consistency model will be around persisted events.
+The exact form of RPC is not decided. One possibility would be to leverage &lt;a href=&quot;https://rsocket.io/&quot;&gt;RSocket&lt;/a&gt; for asynchronous event based RPC or message passing. That is an implementation detail that could be decided later and experimented in the PoC. One of the reasons to use RSocket would be to have proper non-blocking asynchronous backpressure support.&lt;/p&gt;
+
+&lt;p&gt;Persisted events can be replicated to other components. The main replication model for replicating state from the metadata shard is in an event sourced way. The event log is the source of truth, and the component that is tracking state changes will be eventually consistent with the changes in the metadata shard.&lt;/p&gt;
+
+&lt;p&gt;Some of the metadata consistency issues could be handled in the event log based replication model in a very scalable way.
+Let’s say that if we were to provide guarantees of consistency for a topic or namespace policy change, the metadata shard could track the current metadata consumers that are synchronizing the metadata changes using the event log replication solution. The way to track this would be to have a RPC call (or event notification) for informing the shard of the position in the event log where the consumer is caught up. A metadata change is fully effective when all consumers of the data have caught up.&lt;/p&gt;
+
+&lt;p&gt;This type of model is a different way to handle cache expiration. Instead of thinking of caches, I think it’s more productive to focus on state replication and how can sufficient state consistency be solved for each use case.&lt;/p&gt;
+
+&lt;p&gt;For a lot of topic, tenant and namespace policy changes, it might be fine that the state takes effect asynchronously and eventually. 
+However when the user wants to wait until the change is effective, there’s usually a specific reason for this and the APIs should support both use cases. The problems with metadata inconsistency in the current Pulsar architecture was handled in one of the previous blog posts. The goal would be to have an explicit way to express the consistency model and provide a way to achieve strong consistency.&lt;/p&gt;
+
+&lt;h4 id=&quot;q-how-does-the-lookup-component-locate-the-correct-metadata-shard-for-the-topic&quot;&gt;Q: How does the lookup component locate the correct metadata shard for the topic?&lt;/h4&gt;
+
+&lt;p&gt;This is a very low level detail and this answer might be a bit cryptic. Please ask follow-up questions if this is not understandable.&lt;/p&gt;
+
+&lt;p&gt;The metadata shard is located using a hash function. The lookup has multiple steps and isn’t a direct
+mapping from topic name to a shard. The reason for this is that we would want to support future use cases
+of renaming and moving topics. 
+This logic won’t be exposed to Pulsar clients. The lookup request comes to any lookup component and it can handle the lookup in the most efficient way.&lt;/p&gt;
+
+&lt;p&gt;The high level idea of the mapping:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;map tenant name to internal tenant ID
+    &lt;ul&gt;
+      &lt;li&gt;first map name to shard id using a hash function. (This level could also handle the usecase of isolating tenant names from other accounts in a multi-tenant system and allow names that don’t need to be globally unique.)&lt;/li&gt;
+      &lt;li&gt;lookup the internal tenant ID from the shard&lt;/li&gt;
+      &lt;li&gt;cache and subscribe to future changes from the source shard&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;map namespace to internal namespace ID
+    &lt;ul&gt;
+      &lt;li&gt;first map tenant ID + namespace name to shard id using a hash function&lt;/li&gt;
+      &lt;li&gt;lookup the internal namespace ID from the shard&lt;/li&gt;
+      &lt;li&gt;cache and subscribe to future changes from the source shard&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+  &lt;li&gt;map topic to internal topic ID
+    &lt;ul&gt;
+      &lt;li&gt;first map tenant ID + namespace ID + topic name to shard id using a hash function&lt;/li&gt;
+      &lt;li&gt;lookup the internal topic ID from the shard&lt;/li&gt;
+      &lt;li&gt;cache and subscribe to future changes from the source shard&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;An internal ID can be mapped to a shard without additional lookups.&lt;/p&gt;
+
+&lt;p&gt;This model allows renaming the topic later. In that case, the name -&amp;gt; internal ID mapping would be handled on the other shard, but the topic internal ID would be handled in the former location. The reason for this is that once there’s an internal ID, it directly points to a specific shard where the changes could be made.&lt;/p&gt;
+
+&lt;p&gt;The RPC calls could be implemented in a way where the shard would reply with an error response containing the internal topic ID which would include the information of the actual location of the shard when the topic doesn’t exist on the same shard as where the name maps to. 
+The topic ID would be on the same shard in cases where the topic wasn’t renamed or moved from the original location. The extra lookup hop would be eliminated in most cases, since renaming and moving topics from original locations is an exceptional case.&lt;/p&gt;
+
+&lt;p&gt;The extra hops for tenant and namespace ids could be eliminated by broadcasting tenants and namespaces on all shards. However, this shouldn’t be necessary since the caching will eliminate extra hops for most cases.&lt;/p&gt;
+
+&lt;h4 id=&quot;q-how-do-topics-get-assigned-efficiently-to-brokers-when-topics-are-handled-individually&quot;&gt;Q: How do topics get assigned efficiently to brokers when topics are handled individually?&lt;/h4&gt;
+
+&lt;p&gt;There’s no need to assign topics to brokers unless there are connected producers or consumers. One benefit of the new architecture is that idle topics won’t be active on any brokers. In the current Pulsar architecture, all topics in a namespace bundle get activated when any topic gets an active producer or consumer.
+This detail might require a different approach for maintenance tasks such as data retention so that old data would get periodically deleted. That is something that could be handled on the topic controller. Handling data retention for idling topic bundles is already an uncovered gap in the existing Pulsar architecture.&lt;/p&gt;
+
+&lt;p&gt;To the question itself: individual assignment will be efficient when there is no additional communication overhead in assigning one or many topics at a time to the broker. The assumption is that it’s possible to make the solution handle batching when it’s useful and streaming approaches to replicate state and handle assignments. Topics will be assigned to brokers on-the-fly when clients connect.&lt;/p&gt;
+
+&lt;p&gt;The load managing and balancing solution should be based on some type of resource allocations. Before assigning work to a broker, the topic controller would request the cluster load manager a quota for new topic allocations. The topic controller would periodically request more assignment quotas from the cluster load manager. The benefit of this approach is that the topic controller can go ahead and assign topics to brokers without additional coordination overhead. The assignment quotas could be based on historical statistics of the topics are explicitly set quotas for topic message rate and bytes rate. The cluster load manager would interact with broker load managers in the metadata shard layer to adjust how assignment quotas will be spread out with the updates to actual load. The broker load managers could themselves take action when load should be reduced on an overloaded broker.&lt;/p&gt;
+
+&lt;h4 id=&quot;multi-cluster-support-for-isolating-topics-in-more-advanced-ways-than-current-broker-isolation&quot;&gt;Multi-cluster support for isolating topics in more advanced ways than current broker isolation&lt;/h4&gt;
+
+&lt;p&gt;The topic assignment could have additional rules like tags which are used to isolate topic assignments. Creating a topic will be different from a topic assignment. When a topic is created, it gets assigned to a cluster in a permanent way. The multi-cluster support can be used for multiple reasons:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;isolating topics in more advanced ways than current broker isolation&lt;/li&gt;
+  &lt;li&gt;balancing topics across multiple isolated Pulsar brokers+bookies+zookeepers clusters&lt;/li&gt;
+  &lt;li&gt;phasing out clusters
+    &lt;ul&gt;
+      &lt;li&gt;similar to Blue-Green deployment PIP-188&lt;/li&gt;
+      &lt;li&gt;could support also migrating existing topic messages&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The multiple cluster support could be used to balance the number of topics across multiple broker+bookie+zookeeper clusters, or it could be used in a way where there’s an empty spare cluster waiting until the previous cluster to be filled has reached a certain level of utilization. This type of solutions could be used to manage the capacity for very large deployments.&lt;/p&gt;
+
+&lt;p&gt;There could also be support for something similar (or even reusing) &lt;a href=&quot;https://github.com/apache/pulsar/issues/16551&quot;&gt;Blue-Green deployment PIP-188&lt;/a&gt; to migrate workloads from an old cluster to a new one.&lt;/p&gt;
+
+&lt;p&gt;The topic name and id isn’t directly coupled to a cluster in the new architecture, and this opens up more possibilities. The benefit of phasing out old clusters periodically, is to keep the cluster clean and operational. This is ensured by refreshing clusters completely by phasing out old clusters. With cloud infrastructure this is a feasible approach. It also works as a form of garbage collection and could be used as a way to scale down cluster resources. When a cluster is empty, all persistent storage can be discarded.&lt;/p&gt;
+
+&lt;p&gt;Storing the managed ledger metadata in the metadata shard layers would enable doing the migration across clusters while retaining data offloaded to tiered stored. It’s also possible that cluster phase out could be done in the managed ledger layer in a more non-intrusive way. Existing data could be copied to the target cluster while supporting a seamless and transparent migration across clusters, one topic at a time.&lt;/p&gt;
+
+&lt;h2 id=&quot;summary-of-part-1&quot;&gt;Summary of Part 1&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;This blog post presented a high level architecture for scaling Pulsar to 100 million topics and beyond.&lt;/li&gt;
+  &lt;li&gt;The high level entities in this architecture were described.&lt;/li&gt;
+  &lt;li&gt;Several models to operate and manage large multi-tenant cloud deployments were also presented.&lt;/li&gt;
+  &lt;li&gt;This is a very early raw draft and it’s not perfect.&lt;/li&gt;
+  &lt;li&gt;The next part will continue describing the high level architecture and go more in details how the availability challenge of moving topics across brokers could be solved in the new architecture.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Stay tuned for the next part!&lt;/p&gt;</content><author><name></name></author><category term="pulsar" /><category term="pulsar-ng" /><summary type="html">Context</summary></entry><entry><title type="html">A critical view of Pulsar’s Metadata store abstraction</title><link href="https://codingthestreams.com/pulsar/2022/10/18/view-of-pulsar-metadata-store.html" rel="alternate" type="text/html" title="A critical view of Pulsar’s Metadata store abstraction" /><published>2022-10-18T12:57:14+00:00</published><updated>2022-10-18T12:57:14+00:00</updated><id>https://codingthestreams.com/pulsar/2022/10/18/view-of-pulsar-metadata-store</id><content type="html" xml:base="https://codingthestreams.com/pulsar/2022/10/18/view-of-pulsar-metadata-store.html">&lt;p&gt;This blog post is a continuation of the previous blog post &lt;a href=&quot;/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html&quot;&gt;“Pulsar’s namespace bundle centric architecture limits future options”&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;context&quot;&gt;Context&lt;/h2&gt;
+
+&lt;h3 id=&quot;stating-the-problem-before-describing-the-solution&quot;&gt;Stating the problem before describing the solution&lt;/h3&gt;
+
+&lt;p&gt;Leslie Lamport wrote a short paper in 1978 &lt;a href=&quot;https://www.microsoft.com/en-us/research/publication/state-problem-describing-solution/&quot;&gt;“State the Problem Before Describing the Solution”&lt;/a&gt;. I’m following this principle and continuing to state problems before describing the solution. The solution will be shared later in the blog post series.&lt;/p&gt;
+
+&lt;h3 id=&quot;assumptions&quot;&gt;Assumptions&lt;/h3&gt;
+
+&lt;p&gt;I’m making the assumption that replacing “namespace bundles” in the Pulsar load
+balancing design will be an essential design change to resolve availability
+problems related to broker shutdowns and broker load balancing. There is a need
+to have control topics individually to minimize service disruptions that were
+explained in the previous blog post.&lt;/p&gt;
+
+&lt;p&gt;The Pulsar load balancing design depends on the Pulsar metadata solution. These
+two cannot be separated in a performant, reliable and cost-efficient solution.
+The Pulsar metadata solution will be greatly impacted by the removal of
+“namespace bundles”.&lt;/p&gt;
+
+&lt;p&gt;Because of this dependency, I’m taking a deeper look at Pulsar’s metadata store
+abstraction and what problems should be addressed when revisiting the design.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-is-the-pip-45-metadata-store-abstraction--pluggable-metadata-interface&quot;&gt;What is the PIP-45 Metadata store abstraction / Pluggable metadata interface&lt;/h2&gt;
+
+&lt;h3 id=&quot;background&quot;&gt;Background&lt;/h3&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://github.com/apache/pulsar/wiki/PIP-45%3A-Pluggable-metadata-interface&quot;&gt;PIP-45 Metadata store abstraction / Pluggable metadata interface&lt;/a&gt;
+was introduced gradually in Pulsar versions between 2.6 and 2.10. The changes
+for PIP-45 started already in Pulsar 2.6.0 release with &lt;a href=&quot;https://github.com/apache/pulsar/pull/5358&quot;&gt;PR 5358, “Switch
+ManagedLedger to use MetadataStore
+interface”&lt;/a&gt; .&lt;/p&gt;
+
+&lt;p&gt;PIP-45 was considered feature complete in Pulsar 2.10. There was a blog post
+describing it from the perspective of replacing Zookeeper in Pulsar, &lt;a href=&quot;https://streamnative.io/blog/release/2022-01-25-moving-toward-a-zookeeperless-apache-pulsar/&quot;&gt;“Moving
+Toward a ZooKeeper-Less Apache Pulsar” by David
+Kjerrumgaard&lt;/a&gt;
+in 1/2022.&lt;/p&gt;
+
+&lt;h3 id=&quot;the-promised-land-of-zookeeper-less-pulsar-where-is-it&quot;&gt;The promised land of Zookeeper-less Pulsar: where is it?&lt;/h3&gt;
+
+&lt;p&gt;There have been high hopes that replacing Zookeeper in Pulsar with etcd would
+help solve issues with Pulsar metadata scalability. You can find this mentioned
+also in the previously referenced blog post.&lt;/p&gt;
+
+&lt;p&gt;PIP-45 is completed, but we aren’t seeing any reported improvements with
+scalability by switching from Zookeeper to etcd. This is not to say that PIP-45
+didn’t contain improvements. PIP-45 included major performance improvements such
+as &lt;a href=&quot;https://github.com/apache/pulsar/pull/13043&quot;&gt;“Transparent batching of ZK operations” #13043&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;What if etcd is slower than Zookeeper with Pulsar? There have been talks that
+this might be the case. The community is waiting for the results. We didn’t seem
+to get to the promised land by getting rid of Zookeeper.&lt;/p&gt;
+
+&lt;p&gt;The original problem remains: Zookeeper is an in-memory store and that sets
+limits for scalability. This is something that needs to be addressed.&lt;/p&gt;
+
+&lt;h3 id=&quot;metadata-consistency-issues-from-users-point-of-view&quot;&gt;Metadata consistency issues from user’s point of view&lt;/h3&gt;
+
+&lt;p&gt;Currently, there is extensive caching within Pulsar when tenants, namespaces and
+topics are created, modified and deleted. This can lead to inconsistent behavior
+from the user’s point of view. I’d like to highlight that this is not a new
+problem that PIP-45 introduced.&lt;/p&gt;
+
+&lt;p&gt;There’s a summary of the consistency issues in &lt;a href=&quot;https://github.com/apache/pulsar/issues/12555#issuecomment-955748744&quot;&gt;a GitHub issue comment written
+in
+10/2021&lt;/a&gt;.
+Some problems have been addressed, but the root cause remains: some changes are
+eventually consistent from the user’s point of view, and this isn’t documented
+or defined.&lt;/p&gt;
+
+&lt;p&gt;There are use cases where it is necessary to be able to wait for the metadata
+changes to take full effect before continuing. It would simplify the usage of
+Pulsar if this was supported.&lt;/p&gt;
+
+&lt;p&gt;Some users have worked around this issue by assuming that Pulsar’s metadata
+changes are eventually consistent. In some cases the workaround could be to use
+retries to tolerate problems cased by missing metadata or using polling for
+checking that the changes are effective before continuing. This isn’t great.
+This is a problem that needs to be addressed.&lt;/p&gt;
+
+&lt;h3 id=&quot;metadata-inconsistency-within-pulsar-and-bookkeeper&quot;&gt;Metadata inconsistency within Pulsar and BookKeeper&lt;/h3&gt;
+
+&lt;p&gt;There are also signs of issues where the state in a single broker seems to be in
+a bad state as a result of consistency and concurrency issues with metadata
+handling and caching. One example of such issue:
+&lt;a href=&quot;https://github.com/apache/pulsar/issues/13946&quot;&gt;Endless Topic HTTP Request Redirects&lt;/a&gt; .&lt;/p&gt;
+
+&lt;p&gt;The PIP-45 abstractions also contain interfaces for leader election.&lt;/p&gt;
+
+&lt;p&gt;The Pulsar Metadata store abstraction is also used within BookKeeper as part of
+the Pulsar distribution since Pulsar 2.10. I have seen several issues in test
+environments with Pulsar 2.10 where the BookKeeper’s metadata state has become
+corrupted. After making changes in the configuration to by-pass Pulsar Metadata
+interface for Bookkeeper client and Bookkeeper server (possible with
+&lt;a href=&quot;https://github.com/apache/pulsar/pull/17834&quot;&gt;#17834&lt;/a&gt;), the problems went away. One of the
+severe issues was &lt;a href=&quot;https://github.com/apache/pulsar/issues/17759&quot;&gt;#17759&lt;/a&gt; which is very
+recently fixed in master branch with
+&lt;a href=&quot;https://github.com/apache/pulsar/pull/17922&quot;&gt;#17922&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;It is possible that the incidents were caused by issues with the PIP-45 Leader
+election abstraction. One of the fixes has been
+&lt;a href=&quot;https://github.com/apache/pulsar/pull/17401&quot;&gt;#17401&lt;/a&gt; . This change hasn’t yet been
+cherry-picked to releases.&lt;/p&gt;
+
+&lt;p&gt;I recommend disabling Pulsar Metadata driver for Bookkeeper client (in broker)
+and Bookies until the recent fixes such as &lt;a href=&quot;https://github.com/apache/pulsar/pull/17401&quot;&gt;PR
+17401&lt;/a&gt; and &lt;a href=&quot;https://github.com/apache/pulsar/pull/17922&quot;&gt;PR
+17922&lt;/a&gt; have been released and that
+there’s confidence that Pulsar Metadata store is stable with Bookkeeper. It’s
+possible to configure Bookkeeper client in the broker and in bookies to by-pass
+Pulsar Metadata store and use Zookeeper directly.&lt;/p&gt;
+
+&lt;p&gt;Another set of problems have emerged with &lt;a href=&quot;https://github.com/apache/pulsar/issues/13304&quot;&gt;“PIP-118, Do not restart brokers when
+ZooKeeper session expires”&lt;/a&gt;. I
+would recommend setting &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;zookeeperSessionExpiredPolicy=shutdown&lt;/code&gt; to reduce risk
+of problems in this area until it is proven to be stable.&lt;/p&gt;
+
+&lt;p&gt;It feels like there should almost be a documented proof of correctness for the
+distributed locks and leader election implementation. Pulsar coordination relies
+on
+&lt;a href=&quot;https://github.com/apache/pulsar/blob/master/pulsar-metadata/src/main/java/org/apache/pulsar/metadata/coordination/impl/ResourceLockImpl.java&quot;&gt;ResourceLockImpl&lt;/a&gt;
+and
+&lt;a href=&quot;https://github.com/apache/pulsar/blob/master/pulsar-metadata/src/main/java/org/apache/pulsar/metadata/coordination/impl/LeaderElectionImpl.java&quot;&gt;LeaderElectionImpl&lt;/a&gt;
+which don’t contain much documentation in this area.&lt;/p&gt;
+
+&lt;p&gt;This migth be a messy description of the challenges and it’s just one view point.
+However, there’s more work to do until PIP-45 is stable.&lt;/p&gt;
+
+&lt;h3 id=&quot;scalability-issue-all-metadata-changes-are-broadcasted-to-all-brokers-and-bookies&quot;&gt;Scalability issue: all metadata changes are broadcasted to all brokers and bookies&lt;/h3&gt;
+
+&lt;p&gt;A model where all changes are broadcasted to all nodes in the cluster is
+problematic. This change was made in Pulsar 2.9.0 in &lt;a href=&quot;https://github.com/apache/pulsar/pull/11198&quot;&gt;PR 11198, “Use ZK
+persistent watches”&lt;/a&gt;. The global
+change event broadcasting design doesn’t follow typical scalable design
+principles. This will pose limits on Pulsar clusters with large number of
+brokers and bookies. The current metadata change notification solution doesn’t
+support scaling out when it’s based on a design that broadcast all notifications
+to every participant.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://akfpartners.com/growth-blog/scale-cube&quot;&gt;Scale cube&lt;/a&gt; is one way to
+define the scalability dimensions of a system. The centralized change notification solution is essentially a single queue, and
+it will become an issue when the size of the system grows since there isn’t the
+possibility to parallelize.&lt;/p&gt;
+
+&lt;p&gt;The scale cube’s Z-axis is about sharding. A scalable solution for Pulsar metadata should be sharded
+so that the design could eliminate solutions where all changes are broadcasted everywhere.&lt;/p&gt;
+
+&lt;h2 id=&quot;key-takeaways&quot;&gt;Key takeaways&lt;/h2&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;replacing “namespace bundles” in the Pulsar design will also impact Pulsar metadata solution&lt;/li&gt;
+  &lt;li&gt;the current Pulsar metadata solution has several unresolved challenges:
+    &lt;ul&gt;
+      &lt;li&gt;PIP-45 has not delivered the promise of Zookeeper-less Pulsar in practice: Zookeeper remains the recommended and most performant option. Zookeeper has scalability limits with metadata size.&lt;/li&gt;
+      &lt;li&gt;Pulsar metadata solution has usability issues with it’s eventual consistent change model which isn’t properly described.&lt;/li&gt;
+      &lt;li&gt;PIP-45 metadata change event broadcasting solution conflicts with scalable design.&lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The challenges with Pulsar metadata are an additional motivation to revisit the Pulsar architecture, besides addressing the availability issues in topic unloading. Addressing the Pulsar load balancing and metadata challenges are the problem space for the upcoming blog posts about the possible solutions to address this by changing Pulsar’s architecture. Stay tuned!&lt;/p&gt;</content><author><name></name></author><category term="pulsar" /><category term="pulsar-ng" /><summary type="html">This blog post is a continuation of the previous blog post “Pulsar’s namespace bundle centric architecture limits future options”.</summary></entry><entry><title type="html">Pulsar’s namespace bundle centric architecture limits future options</title><link href="https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html" rel="alternate" type="text/html" title="Pulsar’s namespace bundle centric architecture limits future options" /><published>2022-10-17T11:18:38+00:00</published><updated>2022-10-17T11:18:38+00:00</updated><id>https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor</id><content type="html" xml:base="https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">&lt;p&gt;This blog post is a continuation of the previous blog post &lt;a href=&quot;/pulsar/2022/10/14/pulsars-promise.html&quot;&gt;“Pulsar’s high
+availability promise and its blind spot”&lt;/a&gt;, which explained Pulsar load balancing at a high level and one of the
+current challenges with Pulsar load balancing from the perspective of high
+availability.&lt;/p&gt;
+
+&lt;h3 id=&quot;what-is-a-namespace-bundle&quot;&gt;What is a “namespace bundle”&lt;/h3&gt;
+
+&lt;p&gt;“Namespace bundles” are defined in the &lt;a href=&quot;https://pulsar.apache.org/docs/administration-load-balance#dynamic-assignments&quot;&gt;Pulsar reference
+documentation&lt;/a&gt;
+in this way:&lt;/p&gt;
+&lt;blockquote&gt;
+  &lt;p&gt;“The assignment of topics to brokers is not done at the topic level but at the
+bundle level (a higher level). Instead of individual topic assignments, each
+broker takes ownership of a subset of the topics for a namespace. This subset
+is called a bundle and effectively this subset is a sharding mechanism.”&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;“Topics are assigned to a particular bundle by taking the hash of the topic
+name and checking in which bundle the hash falls.”&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;There has been a clear reason in the current design. With namespace bundles,
+topic load balancing operations can be handled as groups (batches) to minimize
+the overhead of coordination and load balancing operations.&lt;/p&gt;
+
+&lt;h3 id=&quot;implications-of-namespace-bundles-centric-design&quot;&gt;Implications of namespace bundles centric design&lt;/h3&gt;
+
+&lt;p&gt;However, this design also causes essential limitations: a topic cannot be freely
+assigned to a bundle or a broker. In the current namespace bundles design, a
+namespace bundle is determined by calculating a hash of the topic’s name and
+there are hash ranges to define bundle boundaries.&lt;/p&gt;
+
+&lt;p&gt;There is no explicit way to assign a topic to a bundle. Splitting a bundle is
+the only way to impact bundle assignment. More choices are added to how the
+bundle split is determined. That is a sign of a design smell when the end users
+of the system have to start working around an internal implementation detail of
+the system.&lt;/p&gt;
+
+&lt;p&gt;The current Pulsar load balancing makes load balancing decisions dynamically,
+although there are features where placement with predefined rules is used
+(broker isolation, anti-affinity namespaces across failure domains). The bundle
+centric design adds unnecessary complexity to load balancing decisions and
+prevents optimal topic placement.&lt;/p&gt;
+
+&lt;h3 id=&quot;alternative-approach-free-form-placement-of-topics-to-brokers&quot;&gt;Alternative approach: free form placement of topics to brokers&lt;/h3&gt;
+
+&lt;p&gt;Before introducing a replacement solution for namespace bundles in Apache
+Pulsar, let’s first examine the benefits of letting go of namespace bundle
+centric architecture.&lt;/p&gt;
+
+&lt;h4 id=&quot;free-form-placement-of-topics-provides-more-flexibility&quot;&gt;Free form placement of topics provides more flexibility&lt;/h4&gt;
+
+&lt;p&gt;There might be future requirements of having affinity and anti-affinity rules
+for topic placement. It might be useful to be able to have placement rules to
+take availability zones (or data center racks) into account.&lt;/p&gt;
+
+&lt;p&gt;Free form topic placement would also be useful for capacity management. Rate
+limits could be used as part of load balancing decisions, and there could be
+rules for how much total possible throughput is allowed on a specific broker
+when considering the rate limits of assigned topics. Rule based placement could
+also be useful when it is known that the topic traffic pattern is bursty (common
+in batch oriented processing) and maximum throughput is desired while the
+traffic burst is being processed.&lt;/p&gt;
+
+&lt;p&gt;Dynamic load balancing is simply too slow in reacting to such changes in traffic
+patterns. In these cases, it might be useful to be able to pre-assign the
+different partitions of a partitioned topic to be balanced across available
+brokers in the cluster with anti-affinity rules instead of making this decision
+dynamically after the traffic is running. The traffic burst could be over when
+the load balancer reacts.&lt;/p&gt;
+
+&lt;h4 id=&quot;advanced-form-of-broker-isolation-and-capacity-management&quot;&gt;Advanced form of broker isolation and capacity management&lt;/h4&gt;
+
+&lt;p&gt;Broker isolation is another use case for free form topic placement. In the case
+of capacity issues or noisy neighbor performance issues in achieving SLAs, it
+would be useful to be able to assign a specific topic to a dedicate set of
+brokers. Broker isolation is currently possible at namespace level, but having
+this possibility at topic level would increase flexibility&lt;/p&gt;
+
+&lt;p&gt;On a multi-tenant SaaS platform, this would give more possibilities in meeting
+QoS/SLA by having better ways for ensuring guaranteed throughput and latency
+with better capacity management.&lt;/p&gt;
+
+&lt;p&gt;Achieving autoscaling requires better capacity management. Unless there’s a way
+to run the existing capacity at a certain level and measure and control this,
+there aren’t ways to make relevant scale-out and scale-in decisions. These
+requirements could also be considered in Pulsar load balancing improvements.&lt;/p&gt;
+
+&lt;h4 id=&quot;enabling-a-seamless-handover-of-topic-from-one-broker-to-another&quot;&gt;Enabling a seamless handover of topic from one broker to another&lt;/h4&gt;
+
+&lt;p&gt;The &lt;a href=&quot;/pulsar/2022/10/14/pulsars-promise.html&quot;&gt;previous blog post&lt;/a&gt; covered
+issues with unloading topics and how that causes short durations of
+unavailability to Pulsar producers and consumers.&lt;/p&gt;
+
+&lt;p&gt;In a graceful broker shutdown, the namespace bundles that are owned by the
+broker are unloaded and released. There will be a short interruption in message
+delivery because of this operation. Similar interruptions happen when Pulsar
+load balancer decides to move a namespace bundle from one broker to another.&lt;/p&gt;
+
+&lt;p&gt;The benefit of free form topic placement would be such that in a graceful broker
+shutdown or when load balancing decides to move topics, producers and consumers
+could be migrated from one broker to another in a seamless handover,
+independently of any “namespace bundle”. Each topic can start serving producers
+and consumers on the other broker immediately, unlike how it happens currently
+that all topics must be unloaded in the previous broker before topics can be
+served in the new location.&lt;/p&gt;
+
+&lt;p&gt;This is the key to prevent downtime and service interruptions in graceful broker
+shutdown or Pulsar broker load balancing.&lt;/p&gt;
+
+&lt;h4 id=&quot;improving-availability-and-reliability-by-reducing-service-disruptions&quot;&gt;Improving availability and reliability by reducing service disruptions&lt;/h4&gt;
+
+&lt;p&gt;When it’s cheap and non-intrusive to migrate topics across brokers, Pulsar load
+balancing will become more effective.&lt;/p&gt;
+
+&lt;p&gt;Effective Pulsar load balancing will help meet SLAs and the defined QoS levels
+in a cost-effective way. Effective load balancing will also make autoscaling an
+option without the risk of causing service interruptions or SLA violations.&lt;/p&gt;
+
+&lt;h3 id=&quot;redesigning-pulsar-architecture&quot;&gt;Redesigning Pulsar architecture&lt;/h3&gt;
+
+&lt;p&gt;The key change to make is to replace the namespace bundle centric design with a
+solution that allows free form placement of topics on brokers in flexible ways.
+This all must be efficient, performant, scalable, reliable and consistent. This
+is based on the assumption that the namespace bundle centric design is a
+limiting factor for Pulsar.&lt;/p&gt;
+
+&lt;p&gt;Major changes in the Apache Pulsar project are proposed with Pulsar Improvement
+Proposals (PIPs).&lt;/p&gt;
+
+&lt;p&gt;Before drafting a set of PIPs for replacing the namespace bundles, the approach
+going forward is to make a proof-of-concept change where there would be a
+significant improvement in Pulsar’s operations at production time and
+maintainability at development time. The PoC should demonstrate the value of
+making a change to the design. It will also be a validation of the assumption
+that the namespace bundle centric design is a limiting factor.&lt;/p&gt;
+
+&lt;p&gt;Another key requirement for the new design is to be able to introduce a new type
+of protocol for handing over a topic between brokers with the goal of minimizing
+service disruptions. At high level this means, that the coordination should
+involve a state machine that handles this efficiently and in a consistent
+manner.&lt;/p&gt;
+
+&lt;p&gt;There are also multiple other reasons why an architecture redesign is needed.
+Current Pulsar Admin APIs don’t handle large amounts of data: there is no
+pagination support. Making the Pulsar Admin APIs support pagination would
+trigger a lot of changes to the existing interfaces and solutions.&lt;/p&gt;
+
+&lt;h4 id=&quot;existing-pulsar-improvement-proposals-pips-related-to-this-area&quot;&gt;Existing Pulsar Improvement Proposals (PIPs) related to this area&lt;/h4&gt;
+
+&lt;p&gt;Implemented:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;&lt;a href=&quot;https://github.com/apache/pulsar/wiki/PIP-45%3A-Pluggable-metadata-interface&quot;&gt;PIP-45: Pluggable metadata
+interface&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://github.com/apache/pulsar/wiki/PIP-39%3A-Namespace-Change-Events&quot;&gt;PIP-39: Namespace Change
+Events&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;In progress:&lt;/p&gt;
+&lt;ul&gt;
+  &lt;li&gt;&lt;a href=&quot;https://github.com/apache/pulsar/issues/15254&quot;&gt;PIP-157: Bucketing topic metadata to allow more topics per
+namespace&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://github.com/apache/pulsar/issues/16691&quot;&gt;PIP-192: New Pulsar Broker Load
+Balancer&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://github.com/apache/pulsar/issues/16153&quot;&gt;PIP-180: Shadow Topic, an alternative way to support readonly topic
+ownership&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;The redesign would have to consider at least these areas where there are
+existing PIPs. The above PIPs show that metadata handling and Pulsar load
+balancing are very closely related topics in Pulsar and while reconsidering the
+architecture choices, they cannot be separated.&lt;/p&gt;
+
+&lt;p&gt;For example, the design for “PIP-192: New Pulsar Broker Load Balancer”, would 
+be completely different if Pulsar didn’t have the namespace bundle centric design
+for Pulsar broker load balancing.&lt;/p&gt;
+
+&lt;h3 id=&quot;key-takeaways&quot;&gt;Key takeaways&lt;/h3&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;The current design of namespace bundles is becoming a limitation for future
+Pulsar improvements.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The assumption is that if we replace “namespace bundles” in the Pulsar load
+balancing design, there will be a better way forward for Pulsar in the future.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Pulsar load balancing design depends on the Pulsar metadata solution. These
+two cannot be separated in a performant, reliable and cost-efficient solution.
+The Pulsar metadata solution will be greatly impacted by the removal of
+“namespace bundles”.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;A proof-of-concept (PoC) solution will be built to validate the assumption and
+show the value of the redesigned Pulsar architecture.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;This blog post series will continue to chart the way forward. Please provide
+your feedback on the Pulsar dev mailing list or by commenting on this blog post.
+There will be upcoming blog posts about the high level solution architecture.
+I’m sure that many are doubting whether that could be solved at all and how it is
+solved. Stay tuned!&lt;/p&gt;</content><author><name></name></author><category term="pulsar" /><category term="pulsar-ng" /><summary type="html">This blog post is a continuation of the previous blog post “Pulsar’s high availability promise and its blind spot”, which explained Pulsar load balancing at a high level and one of the current challenges with Pulsar load balancing from the perspective of high availability.</summary></entry></feed>

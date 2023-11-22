@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Scalable distributed system principles in the context of redesigning Apache Pulsar’s metadata solution | Coding the Streams - tech blog by Lari Hotari</title>
+<meta name="generator" content="Jekyll v3.9.2">
+<meta property="og:title" content="Scalable distributed system principles in the context of redesigning Apache Pulsar’s metadata solution">
+<meta property="og:locale" content="en_US">
+<meta name="description" content="Context">
+<meta property="og:description" content="Context">
+<link rel="canonical" href="https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles.html">
+<meta property="og:url" content="https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles.html">
+<meta property="og:site_name" content="Coding the Streams - tech blog by Lari Hotari">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2023-03-02T09:38:00+00:00">
+<meta name="twitter:card" content="summary">
+<meta property="twitter:title" content="Scalable distributed system principles in the context of redesigning Apache Pulsar’s metadata solution">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2023-03-02T09:38:00+00:00","datePublished":"2023-03-02T09:38:00+00:00","description":"Context","headline":"Scalable distributed system principles in the context of redesigning Apache Pulsar’s metadata solution","mainEntityOfPage":{"@type":"WebPage","@id":"https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles.html"},"url":"https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles.html"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css">
+<link type="application/atom+xml" rel="alternate" href="https://codingthestreams.com/feed.xml" title="Coding the Streams - tech blog by Lari Hotari">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-71LP6Z9K0H"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-71LP6Z9K0H');
+</script>
+  
+
+
+</head>
+<body>
+<header class="site-header" role="banner">
+
+  <div class="wrapper">
+<a class="site-title" rel="author" href="/">Coding the Streams - tech blog by Lari Hotari</a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger">
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewbox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"></path>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+<a class="page-link" href="/about/">About</a><div class="categories-menu page-link">Categories
+<ul>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/pulsar">pulsar</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/eventdriven">eventdriven</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/til">til</a>
+    </li>
+  
+</ul>
+</div>
+<div class="categories-menu page-link">Tags
+<ul>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-ng">pulsar-ng</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/availability">availability</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-dev">pulsar-dev</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/slo">slo</a>
+      </li>
+    
+</ul>
+</div>
+
+        </div>
+      </nav>
+</div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Scalable distributed system principles in the context of redesigning Apache Pulsar's metadata solution</h1>
+    <p class="post-meta"><time class="dt-published" datetime="2023-03-02T09:38:00+00:00" itemprop="datePublished">
+        Mar 2, 2023
+      </time></p>
+      Tags: <a href="/tag/pulsar-ng.html" rel="tag">pulsar-ng</a>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <ul id="toc" class="section-nav">
+<li class="toc-entry toc-h2"><a href="#context">Context</a></li>
+<li class="toc-entry toc-h2"><a href="#thoughts-about-architecture-design-in-the-context-of-apache-pulsars-metadata-solution">Thoughts about architecture design in the context of Apache Pulsar’s metadata solution</a></li>
+<li class="toc-entry toc-h2">
+<a href="#thoughts-about-scalable-distributed-systems-principles-in-the-context-of-apache-pulsars-metadata-solution">Thoughts about scalable distributed systems principles in the context of Apache Pulsar’s metadata solution</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#partitioning--sharding">Partitioning / Sharding</a></li>
+<li class="toc-entry toc-h3"><a href="#shared-nothing--redundancy">Shared nothing &amp; redundancy</a></li>
+<li class="toc-entry toc-h3"><a href="#sufficient-data-consistency-depending-on-the-use-cases">Sufficient data consistency depending on the use cases</a></li>
+<li class="toc-entry toc-h3"><a href="#efficiency-through-eventual-consistency">Efficiency through eventual consistency</a></li>
+<li class="toc-entry toc-h3"><a href="#enabling-parallelism">Enabling parallelism</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h2">
+<a href="#thoughts-about-data-consistency-modeling-that-impacts-the-architecture">Thoughts about data consistency modeling that impacts the architecture</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#consistency-boundaries">Consistency boundaries</a></li>
+<li class="toc-entry toc-h3"><a href="#end-to-end-principle">End-to-end principle</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h2"><a href="#closing-words-for-rearchitecting-apache-pulsar-to-handle-100-million-topics">Closing words for “rearchitecting Apache Pulsar to handle 100 million topics”</a></li>
+</ul>
+<h2 id="context">
+<a class="anchor" href="#context" aria-hidden="true"><span class="octicon octicon-link"></span></a>Context</h2>
+
+<p>Welcome to continue to read about the possible design for rearchitecting Apache Pulsar to handle 100 million topics.</p>
+
+<p>The <a href="/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">previous blog post</a> and the <a href="/pulsar/2022/10/21/possible-high-level-architecture.html">first blog in the series</a> explain more about the context.</p>
+
+<p>This is the last article in the “rearchitecting Apache Pulsar to handle 100 million topics” blog post series.</p>
+
+<h2 id="thoughts-about-architecture-design-in-the-context-of-apache-pulsars-metadata-solution">
+<a class="anchor" href="#thoughts-about-architecture-design-in-the-context-of-apache-pulsars-metadata-solution" aria-hidden="true"><span class="octicon octicon-link"></span></a>Thoughts about architecture design in the context of Apache Pulsar’s metadata solution</h2>
+
+<p>The target system in this case is Apache Pulsar’s metadata solution. This isn’t a description of a holistic architecture design which would be conducted in a top-down approch. This blog post is more about sharing thoughts that what I think that is important to consider when designing the solution.</p>
+
+<p>In earlier blog posts, there has been the design approach of “form follows function”. This blog post takes a different view point and describes some of the driving forces. The “form follows function” approach is helpful in focusing on the core essence of the system so that the architecture is adapted to the true purpose of the system and not the other way around. The book <a href="https://learning.oreilly.com/library/view/system-architecture-strategy/9780136462989/xhtml/fileP7000495919000000000000000000A70.xhtml#:-:text=Function%20is%20the%20activity%2C,raction%20between%20entities.">System Architecture: Strategy and Product Development for Complex Systems</a> is one of the best descriptions of this design philosophy and how it can be applied.</p>
+
+<p>Iterative design is about bouncing back and forth between top-down and bottom-up. What is necessary is the architecture vision that emerges as part of these exercises. The architecture is never perfect and eventually it will be about making decision decisions and tradeoffs in the design.</p>
+
+<p>In the end of the day, the designed system will only be successful when it’s valuable. It’s valuable when the benefits it produces is more than the cost.
+The Apache Pulsar metadata solution doesn’t provide direct end user value. However, the benefits and value contribute to the value creation of the Apache Pulsar system. 
+Holistic system thinking and system design are essential when making larger scale redesign. However, that is not the scope of this blog post.</p>
+
+<h2 id="thoughts-about-scalable-distributed-systems-principles-in-the-context-of-apache-pulsars-metadata-solution">
+<a class="anchor" href="#thoughts-about-scalable-distributed-systems-principles-in-the-context-of-apache-pulsars-metadata-solution" aria-hidden="true"><span class="octicon octicon-link"></span></a>Thoughts about scalable distributed systems principles in the context of Apache Pulsar’s metadata solution</h2>
+
+<p>Scalability is defined in Wikipedia as “the property of a system to handle a growing amount of work by adding resources to the system.”</p>
+
+<p><a href="https://learning.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/">“Designing Data-Intensive Applications” by Martin Kleppmann</a> explains that the architecture of systems that operate at large scale is usually very highly specific to the application. There is no single architecture that works for all use cases and scales universally. However, the book discusses general purpose design elements and approaches that can be adopted to create a suitable architecture.</p>
+
+<p>When designing the architecture of the target system, it is very useful to reflect on the general purpose design elements and approaches of scalable distributed systems.
+This will have a great impact on the architecture. The system decomposition to components and what they are distributed and what internal protocols (messaging interactions) are used to communicate between the components.</p>
+
+<p>Besides the scalable distributed systems principles, the data consistency requirements and principles have a great impact on component distribution and interactions.
+All of this design must happen iteratively until the implementation of a system becomes approachable. It’s possible to start immediately and iterate, but the principles will help guide the way.</p>
+
+<h3 id="partitioning--sharding">
+<a class="anchor" href="#partitioning--sharding" aria-hidden="true"><span class="octicon octicon-link"></span></a>Partitioning / Sharding</h3>
+
+<p>The blog post <a href="/pulsar/2022/10/18/view-of-pulsar-metadata-store.html">“A critical view of Pulsar’s Metadata store abstraction”</a> highlighted the necessity for scalability, particularly a <strong>partitioning (sharding) design</strong> for the given system. Chapter 6 in the DDIA book covers partitioning extensively, which is an often omitted detail in systems with scalability requirements.</p>
+
+<h3 id="shared-nothing--redundancy">
+<a class="anchor" href="#shared-nothing--redundancy" aria-hidden="true"><span class="octicon octicon-link"></span></a>Shared nothing &amp; redundancy</h3>
+
+<p>Shared nothing architecture is a principle related to partitioning in which each node running an application is independent and there are no shared resources, such as a shared disk or file system. Besides Partitioning, replication is also necessary to add redundancy so that individual node failures can be tolerated.</p>
+
+<h3 id="sufficient-data-consistency-depending-on-the-use-cases">
+<a class="anchor" href="#sufficient-data-consistency-depending-on-the-use-cases" aria-hidden="true"><span class="octicon octicon-link"></span></a>Sufficient data consistency depending on the use cases</h3>
+
+<p>In the context of Apache Pulsar’s metadata solution, an efficient design should take into account partitioning and replication, as well as data consistency requirements.
+Metadata should be handled at a sufficient consistency level depending on the use case. The assumption is that eventual consistency is less costly and more performant, and should be used when there’s a way to use it.</p>
+
+<h3 id="efficiency-through-eventual-consistency">
+<a class="anchor" href="#efficiency-through-eventual-consistency" aria-hidden="true"><span class="octicon octicon-link"></span></a>Efficiency through eventual consistency</h3>
+
+<p>The design could also be crafted to enable proper and efficient handling of eventual consistency for metadata in the system. Optimistic locking is an often used mechanism for managing eventual consistent data. When information is sent between components, a version field can be included to indicate which version the command or event should be referring to. Conflict resolution strategies could be applied to handle version conflicts.</p>
+
+<p>In the context of Pulsar, there have been some internal discussions on the design that it would be useful if the topic lookup information could also contain some versioning information so that when the client connects to the broker where the topic has been assigned, there would be a way to allow independent asynchronous transmission of topic assignments so that the broker would know that the client is ahead of the individual broker in its metadata information.</p>
+
+<h3 id="enabling-parallelism">
+<a class="anchor" href="#enabling-parallelism" aria-hidden="true"><span class="octicon octicon-link"></span></a>Enabling parallelism</h3>
+
+<p>It’s possible to handle this also without versioning information, but it has just come up as one example of where eventual consistent delivery of data as events between components could be handled without too much synchronicity which can be preventing parallelism, which is a really important property of high performance systems.</p>
+
+<h2 id="thoughts-about-data-consistency-modeling-that-impacts-the-architecture">
+<a class="anchor" href="#thoughts-about-data-consistency-modeling-that-impacts-the-architecture" aria-hidden="true"><span class="octicon octicon-link"></span></a>Thoughts about data consistency modeling that impacts the architecture</h2>
+
+<p>During my career as a consultant helping companies succeed with software development and build great products, I came across a common pattern that software teams struggled with: data consistency design. Today, it is very common that an agile software team is put to deliver software without much design effort and thought put into the design. “If it works, don’t fix it” approach is fine for software where it’s fine that data consistency is more like a best-efforts consideration of the system. However, when data consistency is essential and data inconsistency problems have a negative business impact, it’s useful to do design.</p>
+
+<h3 id="consistency-boundaries">
+<a class="anchor" href="#consistency-boundaries" aria-hidden="true"><span class="octicon octicon-link"></span></a>Consistency boundaries</h3>
+
+<p>Back in the day, the consistency boundaries of a system where designed around database transactions. The consistency design was focused on designing how database transactions are created and when committed or rolled back. In distributed systems, we must continue to do put effort in ensuring data consistency, but it requires different set of methods. The properties are also different. There is no atomicity with distributed systems as there was in traditional monolithic non-distributed systems. Distributed transactions could provide abstractions for atomicity, but that usually comes with a heavy tradeoff cost which makes it not suitable for efficient large scale systems.</p>
+
+<p>One replacement for distributed transactions for distributed systems is the <a href="https://microservices.io/patterns/data/saga.html">saga pattern</a>. However, that causes the focus go away from the actual consistency design in the design of a distributed system.</p>
+
+<p>A more useful practical design approach is explained in Jonas Bonér’s book  “Reactive Microsystems”, in Chapter 4, Event-First Domain-Driven Design:</p>
+<blockquote>
+  <p><strong>Think in Terms of Consistency Boundaries</strong></p>
+
+  <p>I’ve found it useful to think and design in terms of <em>consistency boundaries</em> for the services:</p>
+  <ol>
+    <li>Resist the urge to begin with thinking about the <em>behavior</em> of a service.</li>
+    <li>Begin with the data—the facts—and think about how it is coupled and what dependencies it has.</li>
+    <li>Identify and model the integrity constraints and what needs to be guaranteed, from a domain- and business-specific view. Interviewing domain experts and stakeholders is essential in this process.</li>
+    <li>Begin with zero guarantees, for the smallest dataset possible. Then, add in the weakest level of guarantee that solves your problem while trying to keep the size of the dataset to a minimum.</li>
+    <li>Let the <em>Single Responsibility Principle</em> (discussed in “Single Responsibility”) be a guiding principle.</li>
+  </ol>
+
+  <p>The goal is to try to minimize the dataset that needs to be <em>strongly consistent</em>. After you have defined the essential dataset for the service, <em>then</em> address the behavior and the protocols for exposing data through interacting with other services and systems—defining our <em>unit of consistency</em>.</p>
+</blockquote>
+
+<p>Lightbend offers this book as a <a href="https://www.lightbend.com/blog/reactive-microsystems-the-evolution-of-microservices-at-scale-free-oreilly-report-by-jonas-boner">free download</a>.</p>
+
+<p>The author refers to Pat Helland’s paper <a href="http://cidrdb.org/cidr2005/papers/P12.pdf">“Data on the Outside versus Data on the Inside”</a>. Bonér references also <a href="http://highscalability.com/blog/2010/12/16/7-design-patterns-for-almost-infinite-scalability.html">7 Design Patterns For Almost-Infinite Scalability</a> which has further references to Pat Helland’s paper <a href="https://www.ics.uci.edu/~cs223/papers/cidr07p15.pdf">Life beyond Distributed Transactions: an Apostate’s Opinion</a> and <a href="https://www.dddcommunity.org/library/vernon_2011/">Vaughn Vernon’s articles about Effective Aggregate Design</a>.</p>
+
+<h3 id="end-to-end-principle">
+<a class="anchor" href="#end-to-end-principle" aria-hidden="true"><span class="octicon octicon-link"></span></a>End-to-end principle</h3>
+
+<p>In addition to the “consistency boundaries”, a closely related design principle is the end-to-end principle. The foundations of the internet were build on this design principle.</p>
+
+<p><a href="http://web.mit.edu/Saltzer/www/publications/endtoend/endtoend.pdf">“End-to-end arguments in system design – Saltzer, Reed, &amp; Clark 1984”</a> is a classic from almost 40 years ago. <a href="https://blog.acolyer.org/2014/11/14/end-to-end-arguments-in-system-design/">The commentary blog post about this article in the Morning Paper blog</a> is a good way to get familiar with this article.</p>
+
+<p>Some quotes from the commentary:</p>
+
+<blockquote>
+  <p>The end-to-end argument says that many functions in a communication system can only be completely and correctly implemented with the help of the application(s) at the endpoints.</p>
+</blockquote>
+
+<blockquote>
+  <p>End-to-end arguments can help with layered protocol design and “may be viewed as part of a set of rational principles for organizing such layered systems.”</p>
+</blockquote>
+
+<p>Wikipedia contains more details about the <a href="the%20https://en.wikipedia.org/wiki/End-to-end_principle">end-to-end principle</a></p>
+
+<p>Another commentary paper is <a href="https://www.csd.uoc.gr/~hy435/material/moors.pdf">A critical review of “End-to-end arguments in system design” – Moors 2002</a>. The conclusions of this paper:</p>
+<blockquote>
+  <p>The end-to-end arguments are a valuable guide for placing
+functionality in a communication system. End-to-end implementations  are
+supported by the need for correctness of implementation, their ability
+to ensure appropriate service, and to facilitate network transparency,
+ease of deployment, and decentralism. Care must be taken in identifying
+the endpoints, and end-to-end implementations can have a mixed impact on
+performance and scalability. To determine if the end-to-end arguments
+are applicable to a certain service, it is important to consider what
+entity is responsible for ensuring that service, and the extent to which
+that entity can trust other entities to maintain that service. The
+end-to-end arguments are insufficiently compelling to outweigh other
+criteria for certain functions such as routing and congestion control.</p>
+</blockquote>
+
+<h2 id="closing-words-for-rearchitecting-apache-pulsar-to-handle-100-million-topics">
+<a class="anchor" href="#closing-words-for-rearchitecting-apache-pulsar-to-handle-100-million-topics" aria-hidden="true"><span class="octicon octicon-link"></span></a>Closing words for “rearchitecting Apache Pulsar to handle 100 million topics”</h2>
+
+<p>This blog post didn’t include practical actions that will take the implementation forward.
+As Jerome Bruner has said “Teaching is about speculating about possibility.”. This blog post series of “rearchitecting Apache Pulsar to handle 100 million topics” has been about teaching by speculating about possibility. Perhaps this possibility has also inspired others in the Apache Pulsar community. I hope so.</p>
+
+<p>“If you want to build a ship,<br>
+don’t drum up the people<br>
+to gather wood, divide the<br>
+work, and give orders.<br>
+Instead, teach them to yearn<br>
+for the vast and endless sea.”</p>
+
+<p>(from Antoine de Saint-Exupéry: The Little Prince)</p>
+
+<p>Perhaps one day, the Apache Pulsar community will build that ship that takes Apache Pulsar to the next level.</p>
+
+  </div>
+
+  
+  <div>
+    <h3>Related Posts</h3>
+    <ul>
+    
+      <li><a href="/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 4</a></li>
+    
+      <li><a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 3</a></li>
+    
+      <li><a href="/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 2</a></li>
+    
+      <li><a href="/pulsar/2022/10/21/possible-high-level-architecture.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 1</a></li>
+    
+      <li><a href="/pulsar/2022/10/18/view-of-pulsar-metadata-store.html">A critical view of Pulsar's Metadata store abstraction</a></li>
+    
+      <li><a href="/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">Pulsar's namespace bundle centric architecture limits future options</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/pulsars-promise.html">Pulsar's high availability promise and its blind spot</a></li>
+    
+      <li><a href="/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html">How do you define high availability in your event driven system?</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/not-about-pulsar-3-0.html">Correction: This blog is not about Apache Pulsar 3.0</a></li>
+    
+      <li><a href="/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html">Possible worlds for Apache Pulsar 3.0 and making that actual</a></li>
+    
+    </ul>
+  </div>
+  <div id="disqus_thread"></div>
+  <script>
+    var disqus_config = function () {
+      this.page.url = 'https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles.html';
+      this.page.identifier = 'https://codingthestreams.com/pulsar/2023/03/02/scalable-distributed-system-principles.html';
+    };
+
+    (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = 'https://codingthestreams.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+    })();
+  </script>
+  <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a>
+</noscript>
+<a class="u-url" href="/pulsar/2023/03/02/scalable-distributed-system-principles.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Coding the Streams - tech blog by Lari Hotari</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">Coding the Streams - tech blog by Lari Hotari</li>
+<li><a class="u-email" href="mailto:lhotari@apache.org">lhotari@apache.org</a></li>
+</ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+<ul class="social-media-list">
+<li><a href="https://github.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">lhotari</span></a></li>
+<li><a href="https://www.twitter.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">lhotari</span></a></li>
+</ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>

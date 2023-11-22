@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Apache Pulsar service level objectives and rate limiting | Coding the Streams - tech blog by Lari Hotari</title>
+<meta name="generator" content="Jekyll v3.9.2">
+<meta property="og:title" content="Apache Pulsar service level objectives and rate limiting">
+<meta property="og:locale" content="en_US">
+<meta name="description" content="Context">
+<meta property="og:description" content="Context">
+<link rel="canonical" href="https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html">
+<meta property="og:url" content="https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html">
+<meta property="og:site_name" content="Coding the Streams - tech blog by Lari Hotari">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2023-11-22T14:37:10+00:00">
+<meta name="twitter:card" content="summary">
+<meta property="twitter:title" content="Apache Pulsar service level objectives and rate limiting">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2023-11-22T14:37:10+00:00","datePublished":"2023-11-22T14:37:10+00:00","description":"Context","headline":"Apache Pulsar service level objectives and rate limiting","mainEntityOfPage":{"@type":"WebPage","@id":"https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html"},"url":"https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css">
+<link type="application/atom+xml" rel="alternate" href="https://codingthestreams.com/feed.xml" title="Coding the Streams - tech blog by Lari Hotari">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-71LP6Z9K0H"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-71LP6Z9K0H');
+</script>
+  
+
+
+</head>
+<body>
+<header class="site-header" role="banner">
+
+  <div class="wrapper">
+<a class="site-title" rel="author" href="/">Coding the Streams - tech blog by Lari Hotari</a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger">
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewbox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"></path>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+<a class="page-link" href="/about/">About</a><div class="categories-menu page-link">Categories
+<ul>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/pulsar">pulsar</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/eventdriven">eventdriven</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/til">til</a>
+    </li>
+  
+</ul>
+</div>
+<div class="categories-menu page-link">Tags
+<ul>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-ng">pulsar-ng</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/availability">availability</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-dev">pulsar-dev</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/slo">slo</a>
+      </li>
+    
+</ul>
+</div>
+
+        </div>
+      </nav>
+</div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Apache Pulsar service level objectives and rate limiting</h1>
+    <p class="post-meta"><time class="dt-published" datetime="2023-11-22T14:37:10+00:00" itemprop="datePublished">
+        Nov 22, 2023
+      </time></p>
+      Tags: <a href="/tag/pulsar-dev.html" rel="tag">pulsar-dev</a>, <a href="/tag/slo.html" rel="tag">slo</a>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <ul id="toc" class="section-nav">
+<li class="toc-entry toc-h2"><a href="#context">Context</a></li>
+<li class="toc-entry toc-h2"><a href="#delivering-improvements-in-apache-pulsar-for-messaging-as-a-service-platform-teams">Delivering Improvements in Apache Pulsar for Messaging-as-a-Service Platform Teams</a></li>
+<li class="toc-entry toc-h2">
+<a href="#why-do-we-need-rate-limiting-in-pulsar">Why Do We Need Rate Limiting in Pulsar?</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#the-problem-of-exceeding-service-level-expectations">The Problem of Exceeding Service Level Expectations</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h2">
+<a href="#current-rate-limiting-challenges-in-pulsar">Current Rate Limiting Challenges in Pulsar</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#pulsar-tcpip-connection-multiplexing-challenge">Pulsar TCP/IP Connection Multiplexing Challenge</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h2"><a href="#arguments-against-pip-310-support-custom-publish-rate-limiters">Arguments against “PIP-310: Support Custom Publish Rate Limiters”</a></li>
+<li class="toc-entry toc-h2">
+<a href="#proposal-for-pulsar-rate-limiting-enhancements">Proposal for Pulsar Rate Limiting Enhancements</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#problems-to-address-as-the-next-step">Problems to address as the next step</a></li>
+<li class="toc-entry toc-h3">
+<a href="#solution-proposal">Solution proposal</a>
+<ul>
+<li class="toc-entry toc-h4"><a href="#avoiding-breaking-changes">Avoiding breaking changes</a></li>
+<li class="toc-entry toc-h4"><a href="#asynchronous-non-blocking-rate-limiter-implementation-proof-of-concept-results">Asynchronous non-blocking rate limiter implementation: Proof-of-concept results</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h3"><a href="#some-implementation-details-of-the-proposed-solution">Some implementation details of the proposed solution</a></li>
+<li class="toc-entry toc-h3"><a href="#proposed-timeline">Proposed timeline</a></li>
+</ul>
+</li>
+</ul>
+<h2 id="context">
+<a class="anchor" href="#context" aria-hidden="true"><span class="octicon octicon-link"></span></a>Context</h2>
+
+<p>This blog post is based on the discussion about improving Apache Pulsar’s rate limiting. The discussion was initiated by a Pulsar Improvement Proposal (PIP) titled “PIP-310: Support Custom Publish Rate Limiters”. The detailed email discussion can be found on the <a href="https://www.mail-archive.com/search?l=dev@pulsar.apache.org&amp;q=subject:%22%5C%5BDISCUSS%5C%5D+PIP%5C-310%5C%3A+Support+custom+publish+rate+limiters%22&amp;o=oldest&amp;f=1" target="_blank">Pulsar dev mailing list</a>.</p>
+
+<p>I wrote this blog post to summarize my viewpoints expressed in this discussion and to provide more context around rate limiting in Pulsar. The PIP has a limited scope of “publish rate limiters”. I believe it’s necessary to take a holistic view and examine the purpose of rate limiters and message throttling in Pulsar.</p>
+
+<h2 id="delivering-improvements-in-apache-pulsar-for-messaging-as-a-service-platform-teams">
+<a class="anchor" href="#delivering-improvements-in-apache-pulsar-for-messaging-as-a-service-platform-teams" aria-hidden="true"><span class="octicon octicon-link"></span></a>Delivering Improvements in Apache Pulsar for Messaging-as-a-Service Platform Teams</h2>
+
+<p>While visiting the <a href="https://pulsar-summit.org/event/north-america-2023" target="_blank">Pulsar Summit North America 2023 in San Francisco</a> last month, I observed a very positive trend: an increasing number of messaging-as-a-service platform teams are adopting Apache Pulsar as their main building block for providing messaging services across their organizations.
+For example, in one of the keynote talks, “A Journey to Deploy Pulsar on Cisco’s Cloud Native IoT Platform,” <a href="https://www.youtube.com/watch?app=desktop&v=YGImIkY6ymo&t=43m30s" target="_blank">Sr. Director Chandra Ganguly explains how they are migrating to use Pulsar in Cisco’s IoT platform that serves over 245M devices, including over 84M connected cars</a>.</p>
+
+<p><iframe id="media-YGImIkY6ymo" class="media" src="https://www.youtube.com/embed/YGImIkY6ymo?start=2610" title="" width="100%" height="350" style="max-width: 600px;outline: none" allow="encrypted-media; picture-in-picture" frameborder="0" allowfullscreen></iframe></p>
+
+<p>This is clear validation that the value of Apache Pulsar’s truly multi-tenant architecture is delivering results, making Apache Pulsar a cost-efficient and reliable solution for messaging-as-a-service platform teams in very demanding application environments.</p>
+
+<p>In the Apache Pulsar project, we are committed to delivering further improvements to the existing multi-tenancy features. One area of improvement is the service level management and capacity management of a large Pulsar system. This is also a key concern of messaging-as-a-service platform teams.</p>
+
+<p>This blog post focuses on rate limiting and throttling in Apache Pulsar and delivering improvements to that. The proposed improvements are prerequisites for expanding the work to cover broader aspects in delivering improvements for messaging-as-a-service platform teams that rely on OSS Apache Pulsar.</p>
+
+<h2 id="why-do-we-need-rate-limiting-in-pulsar">
+<a class="anchor" href="#why-do-we-need-rate-limiting-in-pulsar" aria-hidden="true"><span class="octicon octicon-link"></span></a>Why Do We Need Rate Limiting in Pulsar?</h2>
+
+<p>When operating a multi-tenant platform service, it’s necessary to define and provide a specific level of service to the system’s users (see <a href="https://sre.google/sre-book/service-level-objectives/" target="_blank">Google SRE book’s SLO chapter</a> for more details). The primary reason for implementing rate limiting in Pulsar is to manage the service level and system capacity.</p>
+
+<p>Defining explicit Service Level Objectives (SLOs) allows service providers to set proper performance expectations for consumers in a multi-tenant system like Apache Pulsar. Without clearly communicated targets, clients may develop unrealistic assumptions about latency, throughput, and reliability.</p>
+
+<p>For example, in an empty Pulsar cluster with ample idle resources, end-to-end latency is extremely low. Clients could come to depend on this undefined “peak performance” as the expected service level. However, as more tenants and traffic utilize the system, resource contention increases queues and latency.</p>
+
+<p>Suddenly, previously functional applications might begin failing catastrophically when backpressured if the applications are needlessly dependent on very low latency and high throughput where backpressure hasn’t been applied. One concrete example of this is an application that uses Pulsar producer’s asynchronous sending but lacks proper logic to handle errors in sending. When the application is backpressured, it’s possible that the send queue fills up on the client side, and in the case of asynchronous sending with non-blocking behavior (Pulsar Java client: <code class="language-plaintext highlighter-rouge">blockIfQueueFull</code> option with the default value of <code class="language-plaintext highlighter-rouge">false</code>; Pulsar Go client: <code class="language-plaintext highlighter-rouge">DisableBlockIfQueueFull: true</code>), that results in the message not being sent and instead reported as failed asynchronously. It’s possible that the application developer forgets to handle this type of errors, since they are rare. When this eventually happens, it might lead to application developers filing tickets where this type of behavior is reported as a message loss by the Pulsar messaging service, although the problem is in the application that isn’t resilient to failures or degraded performance. When rate limiting is applied, it is more likely that such applications would fail already during testing and the problem would be resolved before it causes issues in production where the messaging-as-a-service platform team is blamed. (Besides this, there is a need to make application developer’s life easier so that such details in developing messaging applications would be properly covered in Pulsar documentation and code samples. Currently you learn such details by experience which means making a lot of mistakes and dealing with the consequences.<img class="emoji" title=":smile:" alt=":smile:" raw="😄" src="https://github.githubassets.com/images/icons/emoji/unicode/1f604.png" style="vertical-align: middle; display: inline; max-width: 1em; visibility: hidden;" onload="this.style.visibility='visible'" onerror="this.replaceWith(this.getAttribute('raw'))">)</p>
+
+<p>Rate limiting constrains tenant usage to specified quotas, enabling accurate planning and over-commitment of resources. This helps to achieve cost optimizations in operating the service across multiple tenants.</p>
+
+<p>When no SLOs are defined, a certain service level becomes the implicit service level. Tenants might perceive degradation in service performance in very different ways than the service providers. The dilemma is that the service provider hasn’t committed to the service level that the tenant is expecting, leading to many unnecessary conflicts.</p>
+
+<p>Rate limiting is the first step in Pulsar for managing consumer expectations and preventing unrealistic reliance on peak performance.</p>
+
+<h3 id="the-problem-of-exceeding-service-level-expectations">
+<a class="anchor" href="#the-problem-of-exceeding-service-level-expectations" aria-hidden="true"><span class="octicon octicon-link"></span></a>The Problem of Exceeding Service Level Expectations</h3>
+
+<p>There’s a good example in the <a href="https://sre.google/sre-book/service-level-objectives/" target="_blank">SRE book</a> about Google’s Chubby lock service. The high availability of Chubby led some teams to add unreasonable dependencies, assuming it would never fail. However, when service degradations occurred, despite their rarity, dependent services were impacted.</p>
+
+<p>To address this, the Chubby SRE team ensured that availability met, but did not significantly exceed, the SLO target. If no natural outages occurred in a quarter to anchor expectations, the team would deliberately take the system down. This approach forced service owners to handle Chubby unavailability, preventing an unrealistic reliance on its availability.</p>
+
+<p>Explicit SLOs allow providers to properly set consumer expectations. Meeting, but not dramatically exceeding, SLOs, along with controlled failures, helps avoid dependencies that assume a level of reliability not guaranteed.</p>
+
+<p>In the context of Pulsar, rate limiting helps to properly set consumer expectations about the performance that is sustainable.</p>
+
+<h2 id="current-rate-limiting-challenges-in-pulsar">
+<a class="anchor" href="#current-rate-limiting-challenges-in-pulsar" aria-hidden="true"><span class="octicon octicon-link"></span></a>Current Rate Limiting Challenges in Pulsar</h2>
+
+<p>The existing rate limiters in Pulsar have several problems:</p>
+
+<ul>
+  <li>
+    <p>The default publishing rate limiter is ineffective in practice due to its high CPU overhead when operating at scale, making it unusable.</p>
+  </li>
+  <li>
+    <p>Additionally, the default rate limiter is inaccurate, and the rate limiting behavior is inconsistent. This inconsistency is one of the reasons why the “precise” rate limiter was introduced.</p>
+  </li>
+  <li>
+    <p>The “precise” rate limiter, while not exhibiting CPU issues, lacks the ability to configure an average rate limit over longer time periods. This limitation hinders the handling of traffic spikes by allowing bursting.</p>
+  </li>
+  <li>
+    <p>The “precise” rate limiter impacts the latencies of other topics that have not reached the rate limit. This impact is due to heavy lock contention on Netty IO threads that should optimally run non-blocking code. Lock contention causes slowdowns on all traffic served on the shared IO thread. This problem is reported as <a href="https://github.com/apache/pulsar/issues/21442" target="_blank">issue #21442</a>.</p>
+  </li>
+  <li>
+    <p>Having multiple rate limiting implementations and using “precise” as terminology exposes unnecessary internal details through the configuration interface. It is bad architectural practice to expose implementation details when that doesn’t provide additional value.</p>
+  </li>
+  <li>
+    <p>Pulsar relies on TCP/IP connection flow control for applying backpressure. However, single TCP connections get shared across multiple Pulsar producers and consumers multiplexed together.</p>
+  </li>
+</ul>
+
+<p>There is a clear need to improve Pulsar’s out-of-the-box rate limiting capabilities.</p>
+
+<h3 id="pulsar-tcpip-connection-multiplexing-challenge">
+<a class="anchor" href="#pulsar-tcpip-connection-multiplexing-challenge" aria-hidden="true"><span class="octicon octicon-link"></span></a>Pulsar TCP/IP Connection Multiplexing Challenge</h3>
+
+<p>Pulsar relies on TCP/IP connection flow control for applying backpressure. Backpressure is achieved by pausing to read new messages from a connection, which eventually leads to a situation where the TCP/IP connection flow control “backpressures” all the way to the client. This type of backpressure solution is common in networking applications. However, the challenge in Pulsar is that a single TCP connection is commonly shared across multiple Pulsar producers and consumers, which are multiplexed together by the Pulsar client.</p>
+
+<p>This creates a significant complication - all producers over that connection are throttled as one, rather than being individually rate limited. Similarly, rate limiters interact across streams unpredictably, impacting behavior. One rate limiter would throttle the connection, and another rate limiter would immediately unblock it.</p>
+
+<p>The Apache Flink community encountered related issues from multiplexing backpressure on shared TCP connections. Their <a href="https://flink.apache.org/2019/06/05/flink-network-stack.html#inflicting-backpressure-1" target="_blank">2019 blog post explains the problem and solution</a> in Flink 1.5 to introduce explicit stream-specific flow control.</p>
+
+<p>Pulsar could implement similar flow control changes to enable reliable per-producer rate limiting in the multiplexing connection scenario. One possible solution would be to have Pulsar producers use “permits” for flow control, in a similar way as <a href="https://pulsar.apache.org/docs/next/developing-binary-protocol/#flow-control" target="_blank">Pulsar consumers use “permits” for flow control</a>.</p>
+
+<p>It was also highlighted in the discussion that Kafka quotas have a way to communicate from the broker to the client that it is running over quota. There was also an example from HTTP where quota exhaustion can be communicated with the 429 (Too Many Requests) status code.</p>
+
+<p>Alternatively, client configuration options could isolate specific producers or consumers on dedicated, non-shared connections to avoid contention. This solution could be implemented without any changes to the Pulsar binary protocol and could be delivered quickly. It would be a way to mitigate possible issues caused by connection multiplexing before the changes are delivered in the Pulsar binary protocol.</p>
+
+<p>This highlights how Pulsar’s backpressure design impacts capabilities like rate limiting and would also need improvements.</p>
+
+<h2 id="arguments-against-pip-310-support-custom-publish-rate-limiters">
+<a class="anchor" href="#arguments-against-pip-310-support-custom-publish-rate-limiters" aria-hidden="true"><span class="octicon octicon-link"></span></a>Arguments against “PIP-310: Support Custom Publish Rate Limiters”</h2>
+
+<p>Introducing pluggable external rate limiters has concerning implications:</p>
+
+<ul>
+  <li>It increases the overall system complexity without corresponding gains. Apache Pulsar already supports many plugin extensions, but further fragmentation should be avoided without clear benefit.</li>
+  <li>Public interfaces must be maintained long-term, which can hinder refactoring and slow down future development.
+    <ul>
+      <li>Implementation details could leak into the public interfaces, making it harder to change these details.</li>
+    </ul>
+  </li>
+  <li>No other messaging systems support custom rate limiters, so it is unclear why Pulsar would require such unique extensibility.</li>
+  <li>Requiring external libraries just to make rate limiting usable in Pulsar would go against the good out-of-the-box experience of using Pulsar.</li>
+</ul>
+
+<p>Here are some additional arguments against custom publish rate limiters:</p>
+
+<ul>
+  <li>
+    <p>There is no evidence that custom rate limiters are necessary to solve concrete problems faced when operating Pulsar at scale. The current built-in rate limiters likely can be enhanced to handle typical use cases related to rate limiting.</p>
+  </li>
+  <li>
+    <p>Introducing custom rate limiters narrows the focus, while capacity management and service levels require a broader, system-wide perspective.</p>
+  </li>
+  <li>
+    <p>Merely fine-tuning custom rate limits cannot prevent overall system overload when operating a large Pulsar cluster. Custom limiters operate on a topic or namespace, ignoring cluster-wide resource usage and contention. Intelligent global capacity management capabilities are required to handle dynamic workloads.</p>
+  </li>
+  <li>
+    <p>While custom rate limiters could provide more flexibility in modeling tenant usage, this does not inherently help meet tenant SLAs in a shared environment. Custom limiters introduce additional fragmentation, control loops, and components that must cooperate correctly at large scale.</p>
+  </li>
+  <li>
+    <p>So far, there haven’t been concrete examples of what problems a custom rate limiter could resolve and how this would happen.</p>
+    <ul>
+      <li>A concrete example has been about bursting, and that is a clear gap in the current functionality of rate limiters. Bursting support should be implemented in core Pulsar rate limiting while improving and fixing the issues of the existing Pulsar rate limiting solution.</li>
+    </ul>
+  </li>
+</ul>
+
+<p>In summary, custom rate limiters seem like an intricate solution lacking supporting evidence of real-world necessity. A better solution for all Pulsar users is fixing the issues in the current rate limiting and putting more effort into improving Pulsar’s multi-tenancy, service level management, and capacity management capabilities since that seems to be the main reason why custom publish rate limiters are proposed.</p>
+
+<p>I’d like to mention that the discussion around PIP-310 has been very valuable, and it has brought up challenges in operating Pulsar at scale. Without these discussions, the important feedback loop for Pulsar development would be missing. For example, one of the identified gaps was related to protecting against misbehaving applications and denial-of-service attacks. Pulsar doesn’t currently have many capabilities in this area. It would be a useful feature for Pulsar operators to be able to block individual clients, consumers and producers when addressing certain situations such as misbehaving applications.</p>
+
+<p>We all seem to share the same mission of improving OSS Apache Pulsar to meet the broader needs of messaging-as-a-service platform teams. By working together, we can achieve a lot, even in a relatively short time span.</p>
+
+<h2 id="proposal-for-pulsar-rate-limiting-enhancements">
+<a class="anchor" href="#proposal-for-pulsar-rate-limiting-enhancements" aria-hidden="true"><span class="octicon octicon-link"></span></a>Proposal for Pulsar Rate Limiting Enhancements</h2>
+
+<h3 id="problems-to-address-as-the-next-step">
+<a class="anchor" href="#problems-to-address-as-the-next-step" aria-hidden="true"><span class="octicon octicon-link"></span></a>Problems to address as the next step</h3>
+
+<p>Rather than custom pluggability, effort should go towards overhauling the built-in rate limiting:</p>
+
+<ul>
+  <li>Consolidate the multiple existing rate limiting options into a single, configurable rate limiting solution
+    <ul>
+      <li>Remove the separate “precise” rate limiter. It is bad practice to leak implementation details to users when this is unnecessary.</li>
+      <li>Add configurable options for allowing traffic bursting</li>
+    </ul>
+  </li>
+  <li>Address these problems in existing Pulsar rate limiting:
+    <ul>
+      <li>High CPU overhead</li>
+      <li>High lock contention that impacts shared Netty IO threads and adds latency to unrelated Pulsar topic producers</li>
+      <li>Code maintainability
+        <ul>
+          <li>There are very few Pulsar core developers that understand how the current Pulsar rate limiting and backpressure work end-to-end.</li>
+          <li>Improve understandability of code
+            <ul>
+              <li>Introduce clear concepts and abstractions that are reflected in the code to ease this (example: token bucket)</li>
+            </ul>
+          </li>
+        </ul>
+      </li>
+      <li>Inconsistent behavior:
+        <ul>
+          <li>Connection Multiplexing currently causes a problem where multiple rate limiters operate on the same connection without knowing about each other. One rate limiter might throttle a connection and another immediately unthrottles at a different rate.</li>
+          <li>Connections are throttled at multiple levels in Pulsar. For example, there’s a broker-level publisher rate limiting option. The multiple levels of throttling should be properly coordinated in the implementation. The current solution is not maintainable and some inconsistent behavior is caused by the lack of a proper model for coordinating throttling. The different levels of throttling might be competing on a single connection and this is another source of inconsistency besides the connection multiplexing.</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<h3 id="solution-proposal">
+<a class="anchor" href="#solution-proposal" aria-hidden="true"><span class="octicon octicon-link"></span></a>Solution proposal</h3>
+
+<p>One of the concrete solution plans is to use a token bucket-based algorithm to implement the rate limiter calculations.</p>
+
+<p>Benefits of using a token bucket-based implementation:</p>
+<ul>
+  <li>The conceptual model of the token bucket is well established in the domain of network QoS traffic policies and multi-tenant SaaS QoS.
+    <ul>
+      <li>Examples:
+        <ul>
+          <li>Wikipedia: <a href="https://en.wikipedia.org/wiki/Token_bucket" target="_blank">Token bucket</a>
+</li>
+          <li>Cisco IoS documentation: <a href="https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/qos_plcshp/configuration/15-mt/qos-plcshp-15-mt-book/qos-plcshp-oview.html#GUID-93BCD445-CC99-4808-BAE9-0527A57E671C" target="_blank">What Is a Token Bucket</a>
+</li>
+          <li>Amazon DynamoDB: <a href="https://www.usenix.org/conference/atc22/presentation/elhemali" target="_blank">“Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service”</a>
+</li>
+          <li>Jack Vanlightly’s <a href="https://jack-vanlightly.com/blog/2023/11/14/the-architecture-of-serverless-data-systems" target="_blank">The Architecture of Serverless Data Systems</a> explains details of many SaaS services. Token bucket-based rate limiting is widely used in SaaS data systems.</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>Implementing the token bucket algorithm is extremely simple.</li>
+  <li>The token bucket concept and abstraction makes it easier to understand the implementation and maintain the code over time.</li>
+  <li>The token bucket algorithm is well suited for Netty’s asynchronous programming model.</li>
+</ul>
+
+<p>Since the internals of Pulsar’s rate limiting aren’t currently exposed, it’s possible to refactor the internals of Pulsar to work well with an asynchronous non-blocking rate limiter implementation. This is a necessity in order to solve problems like <a href="https://github.com/apache/pulsar/issues/21442" target="_blank">[Bug] RateLimiter lock contention when use precise publish rate limiter #21442</a>.</p>
+
+<p>Additionally, the proposed solution includes adding a new option to Pulsar clients. This option would allow for the configuration of Pulsar producers and consumers to isolate the specified producer or consumer at the TCP/IP connection level. This would help mitigate potential multiplexing issues when necessary.</p>
+
+<h4 id="avoiding-breaking-changes">
+<a class="anchor" href="#avoiding-breaking-changes" aria-hidden="true"><span class="octicon octicon-link"></span></a>Avoiding breaking changes</h4>
+
+<p>The only external change for Pulsar users would be the addition of configuring the bursting behavior and absolute maximum rate for each rate limiter. The default values could be selected in a way that provides a good usage experience for most users. Most users wouldn’t have to tune the bursting behavior.</p>
+
+<p>This is to say that changing the current Pulsar rate limiting can be done without causing breaking changes. However, according to <a href="https://www.hyrumslaw.com/" target="_blank">Hyrum’s law</a>, this might be impossible.<img class="emoji" title=":smile:" alt=":smile:" raw="😄" src="https://github.githubassets.com/images/icons/emoji/unicode/1f604.png" style="vertical-align: middle; display: inline; max-width: 1em; visibility: hidden;" onload="this.style.visibility='visible'" onerror="this.replaceWith(this.getAttribute('raw'))"></p>
+
+<p><img src="https://imgs.xkcd.com/comics/workflow.png" alt="XKCD: Every change breaks someone's workflow"></p>
+
+<h4 id="asynchronous-non-blocking-rate-limiter-implementation-proof-of-concept-results">
+<a class="anchor" href="#asynchronous-non-blocking-rate-limiter-implementation-proof-of-concept-results" aria-hidden="true"><span class="octicon octicon-link"></span></a>Asynchronous non-blocking rate limiter implementation: Proof-of-concept results</h4>
+
+<p>The token bucket algorithm is well-suited for Netty’s asynchronous programming model. It can be implemented in a lockless, non-blocking way, which is also extremely performant. I have implemented a proof of concept (PoC) at <a href="https://github.com/lhotari/async-tokenbucket" target="_blank">https://github.com/lhotari/async-tokenbucket</a> to provide sufficient confidence in taking the next steps in this direction.</p>
+
+<p><a href="https://github.com/lhotari/async-tokenbucket/blob/master/src/main/java/com/github/lhotari/asynctokenbucket/AsyncTokenBucket.java" target="_blank">AsyncTokenBucket</a> is an asynchronous, non-blocking, lockless token bucket algorithm implementation optimized for performance with highly concurrent use. It doesn’t use synchronization or blocking. Instead, it uses compare-and-swap (CAS) operations. The use of CAS fields could cause contention in the form of CAS loops, but this problem is addressed in the solution with multiple levels of CAS fields, so multiple threads don’t frequently compete to update a CAS field in a CAS loop. The JVM’s LongAdder class is used in the hot path to hold the sum of consumed tokens. The LongAdder class is a proven solution for addressing the CAS loop contention problem for a counter.</p>
+
+<p>The main usage flow of the AsyncTokenBucket class is as follows:</p>
+
+<ol>
+  <li>Tokens are consumed by calling the <code class="language-plaintext highlighter-rouge">consumeTokens</code> method.</li>
+  <li>The <code class="language-plaintext highlighter-rouge">calculatePauseNanos</code> method is called to calculate the duration of a possible pause when the tokens are fully consumed.</li>
+</ol>
+
+<p>The <code class="language-plaintext highlighter-rouge">AsyncTokenBucket</code> class doesn’t have external side effects. It’s like a stateful function, just like a counter function. Indeed, it is just a sophisticated counter. It can be used as a building block for implementing higher-level asynchronous rate limiter implementations, which do need side effects.</p>
+
+<p>As part of the proof of concept, the performance was validated. This particular test measures the overhead of maintaining the token bucket calculations across 1, 10, and 100 threads. Here is an example output of running the <a href="https://github.com/lhotari/async-tokenbucket/blob/9c807bedec18a0e968113bdd0394ecebe6e4cf32/src/test/java/com/github/lhotari/asynctokenbucket/AsyncTokenBucketTest.java#L66-L100" target="_blank">AsyncTokenBucketTest</a> on a Dell XPS 2019 i9 laptop:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>❯ ./gradlew performanceTest
+
+&gt; Task :performanceTest
+
+AsyncTokenBucketTest &gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &gt; [1] 1 STANDARD_OUT
+    Consuming for 10 seconds...
+    Counter value 125128028 tokens:199941612
+    Achieved rate: 12,512,802 ops per second with 1 threads
+    Consuming for 10 seconds...
+    Counter value 126059043 tokens:199920507
+    Achieved rate: 12,605,904 ops per second with 1 threads
+
+AsyncTokenBucketTest &gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &gt; [1] 1 PASSED
+
+AsyncTokenBucketTest &gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &gt; [2] 10 STANDARD_OUT
+    Consuming for 10 seconds...
+    Counter value 1150055476 tokens:45309290
+    Achieved rate: 115,005,547 ops per second with 10 threads
+    Consuming for 10 seconds...
+    Counter value 1152924215 tokens:45692611
+    Achieved rate: 115,292,421 ops per second with 10 threads
+
+AsyncTokenBucketTest &gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &gt; [2] 10 PASSED
+
+AsyncTokenBucketTest &gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &gt; [3] 100 STANDARD_OUT
+    Consuming for 10 seconds...
+    Counter value 1650149177 tokens:-451095706
+    Achieved rate: 165,014,917 ops per second with 100 threads
+    Consuming for 10 seconds...
+    Counter value 1664288687 tokens:-462912837
+    Achieved rate: 166,428,868 ops per second with 100 threads
+
+AsyncTokenBucketTest &gt; shouldPerformanceOfConsumeTokensBeSufficient(int) &gt; [3] 100 PASSED
+
+BUILD SUCCESSFUL in 1m 15s
+3 actionable tasks: 3 executed
+</code></pre></div></div>
+
+<p>With 100 threads, about 165M token bucket ops/second are achieved. On a single thread, it’s about 12.5M token bucket ops/second.
+That’s a promising result in order to meet the sufficient performance characteristics for Pulsar rate limiting.</p>
+
+<h3 id="some-implementation-details-of-the-proposed-solution">
+<a class="anchor" href="#some-implementation-details-of-the-proposed-solution" aria-hidden="true"><span class="octicon octicon-link"></span></a>Some implementation details of the proposed solution</h3>
+
+<p>In addition to the <a href="https://github.com/lhotari/async-tokenbucket" target="_blank">asynchronous non-blocking token bucket implementation PoC</a>, I made a quick few hour development spike within the Pulsar code base to gain confidence about the implementation direction to start with.</p>
+
+<p>One possible implementation strategy is to focus on replacing the existing rate limiter with <a href="https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-common/src/main/java/org/apache/pulsar/common/util/AsyncTokenBucket.java" target="_blank">AsyncTokenBucket</a> while simultaneously addressing the throttling coordination issue and integrating all of this in the existing code base. The remaining parts of the solution would emerge while working on the implementation iteratively. I believe that the spike provides a sufficient level of confidence that this implementation strategy could be viable.</p>
+
+<p>In the spike, I added a <a href="https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-broker/src/main/java/org/apache/pulsar/broker/service/ThrottleTracker.java" target="_blank">“ThrottleTracker” class</a> to handle tracking of the connection’s throttling status. There’s a subclass, <a href="https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-broker/src/main/java/org/apache/pulsar/broker/service/ServerCnx.java#L270-L304" target="_blank">ServerCnxThrottleTracker</a>, where the intention is to interface deeper with the ServerCnx class while keeping the core throttling coordination logic in the ThrottleTracker class. Please note that the spike was developed in a few hours and doesn’t contain a workable end-to-end solution where these parts are fully integrated with required changes.</p>
+
+<p>There’s a need to coordinate all various reasons why a connection is throttled and only if all throttling reasons are cleared, the connection should be unblocked. This is what the ThrottleTracker achieves with a somewhat similar approach as Netty’s reference counting works for buffer allocations. The different reasons to throttle are tracked with a counter. Only when the counter reaches back to 0 will the connection get unblocked by setting autoread back to true. This would solve the problem with inconsistency with throttling across multiple rate limiters.</p>
+
+<p>As mentioned above, the exact internal changes in different parts of Pulsar would emerge while integrating the <a href="https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-common/src/main/java/org/apache/pulsar/common/util/AsyncTokenBucket.java" target="_blank">AsyncTokenBucket</a> and ThrottleTracker/ServerCnxThrottleTracker classes into the Pulsar code base to perform rate limiting.
+For example, this will directly impact the <a href="https://github.com/lhotari/pulsar/blob/lh-rate-limiter-spike-2023-11-22/pulsar-broker/src/main/java/org/apache/pulsar/broker/service/PublishRateLimiter.java" target="_blank">PublishRateLimiter</a> interface among the other rate limiter related interfaces and implementations.</p>
+
+<p>The goal is to change all throttling decisions into delegated calls to ServerCnxThrottleTracker. There will be 2 ways to throttle a connection with <code class="language-plaintext highlighter-rouge">ServerCnxThrottleTracker</code>:</p>
+<ul>
+  <li>setting a flag and unsetting it. (used by throttling based on configured <code class="language-plaintext highlighter-rouge">maxMessagePublishBufferSizeInMB</code> or <code class="language-plaintext highlighter-rouge">maxPendingPublishRequestsPerConnection</code> value)</li>
+  <li>throttling for a specified duration and resuming after that (will be used for various rate limiters)</li>
+</ul>
+
+<p>The publish rate limiting will be using the throttling for a specified duration. The PublishRateLimiter implementation won’t be responsible for handling the throttling. Its role will be simply about:</p>
+<ul>
+  <li>tracking consumed bytes and messages against the configured limits (delegates this to <code class="language-plaintext highlighter-rouge">AsyncTokenBucket</code>)</li>
+  <li>if the limit is exceeded, return a pause duration to the caller (calculated with <code class="language-plaintext highlighter-rouge">AsyncTokenBucket</code>)</li>
+</ul>
+
+<p>The integration code will pass the pause duration to the ServerCnxThrottleTracker, and that’s how the connection will get throttled. Concurrent calls coming from various rate limiters are all handled in the ServerCnxThrottleTracker in a thread-safe and performant way, ensuring consistency in all cases.</p>
+
+<h3 id="proposed-timeline">
+<a class="anchor" href="#proposed-timeline" aria-hidden="true"><span class="octicon octicon-link"></span></a>Proposed timeline</h3>
+
+<p>This proposed solution isn’t far off. It’s realistic to say that the proposed improvements could be part of a Pulsar feature release in less than three months and would be ready for production use.</p>
+
+<p>Let’s make it happen!<img class="emoji" title=":rocket:" alt=":rocket:" raw="🚀" src="https://github.githubassets.com/images/icons/emoji/unicode/1f680.png" style="vertical-align: middle; display: inline; max-width: 1em; visibility: hidden;" onload="this.style.visibility='visible'" onerror="this.replaceWith(this.getAttribute('raw'))"></p>
+
+<p>After this first step, it would be time to start focusing on Pulsar cluster wide capacity management to meet the needs of messaging-as-a-service platform teams dealing with demanding service level management and capacity management requirements. There’s already the Resource Group concept introduced in <a href="https://github.com/apache/pulsar/wiki/PIP-82:-Tenant-and-namespace-level-rate-limiting" target="_blank">“PIP 82: Tenant and namespace level rate limiting”</a>. That’s a good starting point for further improvements.</p>
+
+<p><a href="https://pulsar.apache.org/community/#section-discussions" target="_blank">Please join the Pulsar developer mailing list</a> to keep updated of the developments also in this area of Pulsar. You are also welcome <a href="https://pulsar.apache.org/community/#section-discussions" target="_blank">join the discussions on the mailing list and on Pulsar Slack</a>. You can also contact me directly by email <a href="mailto:lhotari@apache.org" target="_blank">lhotari@apache.org</a>.</p>
+
+<p>Tomorrow on November 23rd, this blog post will be presented and discussed in the <a href="https://github.com/apache/pulsar/wiki/Community-Meetings" target="_blank">Pulsar community meeting</a> that happens online. You are more than welcome to join <a href="https://github.com/apache/pulsar/wiki/Community-Meetings" target="_blank">this Zoom meeting</a>.</p>
+
+<p>I’m looking forward to more participation in Pulsar development from messaging-as-a-service platform teams!</p>
+
+  </div>
+
+  <div id="disqus_thread"></div>
+  <script>
+    var disqus_config = function () {
+      this.page.url = 'https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html';
+      this.page.identifier = 'https://codingthestreams.com/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html';
+    };
+
+    (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = 'https://codingthestreams.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+    })();
+  </script>
+  <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a>
+</noscript>
+<a class="u-url" href="/pulsar/2023/11/22/pulsar-slos-and-rate-limiting.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Coding the Streams - tech blog by Lari Hotari</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">Coding the Streams - tech blog by Lari Hotari</li>
+<li><a class="u-email" href="mailto:lhotari@apache.org">lhotari@apache.org</a></li>
+</ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+<ul class="social-media-list">
+<li><a href="https://github.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">lhotari</span></a></li>
+<li><a href="https://www.twitter.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">lhotari</span></a></li>
+</ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>

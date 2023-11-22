@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Rearchitecting Apache Pulsar to handle 100 million topics, Part 2 | Coding the Streams - tech blog by Lari Hotari</title>
+<meta name="generator" content="Jekyll v3.9.2">
+<meta property="og:title" content="Rearchitecting Apache Pulsar to handle 100 million topics, Part 2">
+<meta property="og:locale" content="en_US">
+<meta name="description" content="Context">
+<meta property="og:description" content="Context">
+<link rel="canonical" href="https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">
+<meta property="og:url" content="https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">
+<meta property="og:site_name" content="Coding the Streams - tech blog by Lari Hotari">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2022-10-24T15:28:00+00:00">
+<meta name="twitter:card" content="summary">
+<meta property="twitter:title" content="Rearchitecting Apache Pulsar to handle 100 million topics, Part 2">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2022-10-24T15:28:00+00:00","datePublished":"2022-10-24T15:28:00+00:00","description":"Context","headline":"Rearchitecting Apache Pulsar to handle 100 million topics, Part 2","mainEntityOfPage":{"@type":"WebPage","@id":"https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html"},"url":"https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css">
+<link type="application/atom+xml" rel="alternate" href="https://codingthestreams.com/feed.xml" title="Coding the Streams - tech blog by Lari Hotari">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-71LP6Z9K0H"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-71LP6Z9K0H');
+</script>
+  
+
+
+</head>
+<body>
+<header class="site-header" role="banner">
+
+  <div class="wrapper">
+<a class="site-title" rel="author" href="/">Coding the Streams - tech blog by Lari Hotari</a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger">
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewbox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"></path>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+<a class="page-link" href="/about/">About</a><div class="categories-menu page-link">Categories
+<ul>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/pulsar">pulsar</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/eventdriven">eventdriven</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/til">til</a>
+    </li>
+  
+</ul>
+</div>
+<div class="categories-menu page-link">Tags
+<ul>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-ng">pulsar-ng</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/availability">availability</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-dev">pulsar-dev</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/slo">slo</a>
+      </li>
+    
+</ul>
+</div>
+
+        </div>
+      </nav>
+</div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Rearchitecting Apache Pulsar to handle 100 million topics, Part 2</h1>
+    <p class="post-meta"><time class="dt-published" datetime="2022-10-24T15:28:00+00:00" itemprop="datePublished">
+        Oct 24, 2022
+      </time></p>
+      Tags: <a href="/tag/pulsar-ng.html" rel="tag">pulsar-ng</a>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <ul id="toc" class="section-nav">
+<li class="toc-entry toc-h2"><a href="#context">Context</a></li>
+<li class="toc-entry toc-h2">
+<a href="#reasons-for-switching-the-pulsar-metadata-storage-model-from-pip-45-to-a-sharded-model">Reasons for switching the Pulsar metadata storage model from PIP-45 to a sharded model</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#more-observations-about-the-pip-45-metadata-store-abstraction">More observations about the PIP-45 Metadata Store abstraction</a></li>
+<li class="toc-entry toc-h3"><a href="#is-the-metadata-shard-presented-in-the-previous-blog-post-like-a-distributed-database-which-uses-raft-such-as-cockroachdb-or-yugabyte">Is the metadata shard presented in the previous blog post like a distributed database which uses Raft, such as CockroachDB or YugaByte?</a></li>
+<li class="toc-entry toc-h3"><a href="#benefits-of-event-logs-as-the-source-of-truth-for-pulsar-metadata">Benefits of event logs as the source of truth for Pulsar metadata</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h2">
+<a href="#scope-for-the-first-experiment">Scope for the first experiment</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#experimenting-with-apache-ratis-and-the-sharding-model">Experimenting with Apache Ratis and the sharding model</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h2"><a href="#summary">Summary</a></li>
+</ul>
+<h2 id="context">
+<a class="anchor" href="#context" aria-hidden="true"><span class="octicon octicon-link"></span></a>Context</h2>
+
+<p>Welcome to read about the possible design for rearchitecting Apache Pulsar to handle 100 million topics.</p>
+
+<p>The <a href="/pulsar/2022/10/21/possible-high-level-architecture.html">previous blog post explains the context</a>.</p>
+
+<p>This blog post continues on more details and defines the scope of the first experiment.</p>
+
+<h2 id="reasons-for-switching-the-pulsar-metadata-storage-model-from-pip-45-to-a-sharded-model">
+<a class="anchor" href="#reasons-for-switching-the-pulsar-metadata-storage-model-from-pip-45-to-a-sharded-model" aria-hidden="true"><span class="octicon octicon-link"></span></a>Reasons for switching the Pulsar metadata storage model from PIP-45 to a sharded model</h2>
+
+<p>The previous blog post presented a major change for the Apache Pulsar metadata storage. Let’s take a closer look in the reasons to do this.</p>
+
+<h3 id="more-observations-about-the-pip-45-metadata-store-abstraction">
+<a class="anchor" href="#more-observations-about-the-pip-45-metadata-store-abstraction" aria-hidden="true"><span class="octicon octicon-link"></span></a>More observations about the PIP-45 Metadata Store abstraction</h3>
+
+<p>Pulsar’s <a href="https://github.com/apache/pulsar/blob/master/pulsar-metadata/src/main/java/org/apache/pulsar/metadata/api/MetadataStore.java">MetadataStore</a> 
+abstraction contains the repository pattern and in addition contains a way to register handlers for notification events and a view to the data that is cached.</p>
+
+<p>Here’s a compressed list of the methods in the interface:</p>
+
+<div class="language-java highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">public</span> <span class="kd">interface</span> <span class="nc">MetadataStore</span> <span class="kd">extends</span> <span class="nc">AutoCloseable</span> <span class="o">{</span>
+    <span class="nc">CompletableFuture</span><span class="o">&lt;</span><span class="nc">Optional</span><span class="o">&lt;</span><span class="nc">GetResult</span><span class="o">&gt;&gt;</span> <span class="nf">get</span><span class="o">(</span><span class="nc">String</span> <span class="n">path</span><span class="o">);</span>
+    <span class="nc">CompletableFuture</span><span class="o">&lt;</span><span class="nc">List</span><span class="o">&lt;</span><span class="nc">String</span><span class="o">&gt;&gt;</span> <span class="nf">getChildren</span><span class="o">(</span><span class="nc">String</span> <span class="n">path</span><span class="o">);</span>
+    <span class="nc">CompletableFuture</span><span class="o">&lt;</span><span class="nc">Boolean</span><span class="o">&gt;</span> <span class="nf">exists</span><span class="o">(</span><span class="nc">String</span> <span class="n">path</span><span class="o">);</span>
+    <span class="nc">CompletableFuture</span><span class="o">&lt;</span><span class="nc">Stat</span><span class="o">&gt;</span> <span class="nf">put</span><span class="o">(</span><span class="nc">String</span> <span class="n">path</span><span class="o">,</span> <span class="kt">byte</span><span class="o">[]</span> <span class="n">value</span><span class="o">,</span> <span class="nc">Optional</span><span class="o">&lt;</span><span class="nc">Long</span><span class="o">&gt;</span> <span class="n">expectedVersion</span><span class="o">);</span>
+    <span class="nc">CompletableFuture</span><span class="o">&lt;</span><span class="nc">Void</span><span class="o">&gt;</span> <span class="nf">delete</span><span class="o">(</span><span class="nc">String</span> <span class="n">path</span><span class="o">,</span> <span class="nc">Optional</span><span class="o">&lt;</span><span class="nc">Long</span><span class="o">&gt;</span> <span class="n">expectedVersion</span><span class="o">);</span>
+    <span class="nc">CompletableFuture</span><span class="o">&lt;</span><span class="nc">Void</span><span class="o">&gt;</span> <span class="nf">deleteRecursive</span><span class="o">(</span><span class="nc">String</span> <span class="n">path</span><span class="o">);</span>
+    <span class="kt">void</span> <span class="nf">registerListener</span><span class="o">(</span><span class="nc">Consumer</span><span class="o">&lt;</span><span class="nc">Notification</span><span class="o">&gt;</span> <span class="n">listener</span><span class="o">);</span>
+    <span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="nc">MetadataCache</span><span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="nf">getMetadataCache</span><span class="o">(</span><span class="nc">Class</span><span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="n">clazz</span><span class="o">,</span> <span class="nc">MetadataCacheConfig</span> <span class="n">cacheConfig</span><span class="o">);</span>
+    <span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="nc">MetadataCache</span><span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="nf">getMetadataCache</span><span class="o">(</span><span class="nc">TypeReference</span><span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="n">typeRef</span><span class="o">,</span> <span class="nc">MetadataCacheConfig</span> <span class="n">cacheConfig</span><span class="o">);</span>
+    <span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="nc">MetadataCache</span><span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="nf">getMetadataCache</span><span class="o">(</span><span class="nc">MetadataSerde</span><span class="o">&lt;</span><span class="no">T</span><span class="o">&gt;</span> <span class="n">serde</span><span class="o">,</span> <span class="nc">MetadataCacheConfig</span> <span class="n">cacheConfig</span><span class="o">);</span>
+<span class="o">}</span>
+</code></pre></div></div>
+
+<p>This is a traditional CRUD interface with additional change notification and caching support.
+The problem with this abstraction is that it’s not optimal for a large scale distributed system such as Pulsar.</p>
+
+<p>There are several problems:</p>
+<ul>
+  <li>lack of support for sharding which is necessary for horizontal scalability.</li>
+  <li>interface doesn’t cover pagination and more advanced ways to search and list entities. Pagination will be necessary when there’s a large amount of entities.</li>
+  <li>all changes are broadcasted to all connected clients. This conflicts with scalable design.</li>
+</ul>
+
+<p>The PIP-45 metadata store abstraction cannot be “fixed” or optimized to address the requirements, what there are for Pulsar for metadata handling. The interface is not complete in it’s current form, since adding support for pagination or new features such as renaming of topics would cause large changes. The previous blog post covered possible new features like renaming or moving topics. 
+Kafka is improving in this area with <a href="https://cwiki.apache.org/confluence/display/KAFKA/KIP-516%3A+Topic+Identifiers">“KIP-516 Topic Identifiers”</a>. Pulsar will need to match Kafka also in this area.</p>
+
+<p>Martin Kleppmann’s <a href="https://www.confluent.io/stream-processing/">“Making Sense of Stream Processing”</a> ebook contains a case study “Web Application Developers Driven to Insanity” (pdf page 50, ebook page 40).
+That is a case study of a web application using traditional CRUD architecture, and it explains the complexity which could arise from having the database as the source of truth.
+This is explained in the chapter called “Using Logs to Build a Solid Data Infrastructure”. Using logs as the source of truth can reduce overall complexity. 
+Event logs as the source of truth is the model that scales well for distributed systems. This is a model that Pulsar should be leveraging internally to reduce complexity and improve reliability.</p>
+
+<h3 id="is-the-metadata-shard-presented-in-the-previous-blog-post-like-a-distributed-database-which-uses-raft-such-as-cockroachdb-or-yugabyte">
+<a class="anchor" href="#is-the-metadata-shard-presented-in-the-previous-blog-post-like-a-distributed-database-which-uses-raft-such-as-cockroachdb-or-yugabyte" aria-hidden="true"><span class="octicon octicon-link"></span></a>Is the metadata shard presented in the previous blog post like a distributed database which uses Raft, such as CockroachDB or YugaByte?</h3>
+
+<p>Yes and no. There are similarities to distributed database design.
+The main difference is the purpose of the component. The Pulsar metadata shard is not a general purpose database. Instead, it’s a deployable Pulsar component that contains multiple software components that handle entities for a specific “shard” in the system.
+The possible software components that run in the “metadata shard”:</p>
+<ul>
+  <li>topic shard inventory</li>
+  <li>tenant shard inventory</li>
+  <li>namespace shard inventory</li>
+  <li>topic controller</li>
+  <li>cluster load manager</li>
+  <li>broker load manager</li>
+</ul>
+
+<p>The components running in each shard will be able to act on local state. Raft will enable low latency replication and high availability of this state.
+The assumption is that modeling and building stateful components for Pulsar in this way will reduce complexity and be a more efficient and effective way
+to achieve the quality requirements of low cost, high performance, low latency, high availability and reliability.</p>
+
+<p>Instead of thinking of a database, it is better to think about “state”. What is the state that is stored in Pulsar, and what state transitions are there?
+The source of truth are the events stored in the log. The Raft solution is used to replicate the event logs. Raft’s replication model is based on event logs.</p>
+
+<p>Raft is not the only solution to replicate state in the solution. Event logs will be available for consuming and the state of consumer position can be used to achieve consistency after state changes. This was explained partially in the previous blog post.</p>
+
+<h3 id="benefits-of-event-logs-as-the-source-of-truth-for-pulsar-metadata">
+<a class="anchor" href="#benefits-of-event-logs-as-the-source-of-truth-for-pulsar-metadata" aria-hidden="true"><span class="octicon octicon-link"></span></a>Benefits of event logs as the source of truth for Pulsar metadata</h3>
+
+<p>The benefit of this approach is that it’s possible to achieve:</p>
+<ul>
+  <li>data locality and data consistency</li>
+  <li>replicated, high available state machines</li>
+  <li>sharding and scalability</li>
+</ul>
+
+<p>This type of architecture will follow “single writer principle”.</p>
+
+<p>One inspiration for this is the <a href="http://curtclifton.net/papers/MoseleyMarks06a.pdf">“Out of the tar pit” paper</a>(<a href="https://blog.acolyer.org/2015/03/20/out-of-the-tar-pit/">“Out of the tar pit” commentary in the “the morning paper” blog</a>).</p>
+
+<blockquote>
+  <p>The biggest problem in the development and maintenance of large-scale software systems is complexity — large systems are hard to understand. We believe that the major
+contributor to this complexity in many systems is the handling of state and the burden that this adds when trying to analyse and reason about the system.</p>
+</blockquote>
+
+<p>The assumption is that the overall complexity of the system can be reduced by reducing shared mutable state in the system.</p>
+
+<h2 id="scope-for-the-first-experiment">
+<a class="anchor" href="#scope-for-the-first-experiment" aria-hidden="true"><span class="octicon octicon-link"></span></a>Scope for the first experiment</h2>
+
+<h3 id="experimenting-with-apache-ratis-and-the-sharding-model">
+<a class="anchor" href="#experimenting-with-apache-ratis-and-the-sharding-model" aria-hidden="true"><span class="octicon octicon-link"></span></a>Experimenting with Apache Ratis and the sharding model</h3>
+
+<p>The goal of the first set of experiments would be in validating the feasibility of Apache Ratis for the “metadata shard” layer and starting to sketch out the protocol between the 
+Lookup &amp; Admin layer components. The protocol between “metadata shard” layer components and the broker can be postponed.</p>
+
+<p>It should be possible to demonstrate the creation of 100000 topics across 5 shards. The first experiment doesn’t necessarily have to follow the Pulsar model closely since the main goal is to get started. The experiment could be used to estimate throughput and latency of creating 1 million entities, 10 million entities and so on.</p>
+
+<p>The upcoming blog posts will cover the experimentation progress and any topics that come up on the way.</p>
+
+<h2 id="summary">
+<a class="anchor" href="#summary" aria-hidden="true"><span class="octicon octicon-link"></span></a>Summary</h2>
+
+<ul>
+  <li>One reason to switch from Pulsar PIP-45 design to an event sourced model is that the assumption is that this results in less complexity and a more reasonable approach for meeting the scalability and reliability requirements together with the new features that will be needed in the future (such as topic renaming/moving support).</li>
+  <li>The “metadata shard” design is an approach where there’s focus on state management and replication of the state across the distributed components.
+    <ul>
+      <li>Metadata isn’t handled as a separate concern outside of the system. It’s handled inside the system.</li>
+    </ul>
+  </li>
+  <li>The scope of the first experiment is to experiment with Apache Ratis and the sharding model.</li>
+</ul>
+
+
+  </div>
+
+  
+  <div>
+    <h3>Related Posts</h3>
+    <ul>
+    
+      <li><a href="/pulsar/2023/03/02/scalable-distributed-system-principles.html">Scalable distributed system principles in the context of redesigning Apache Pulsar's metadata solution</a></li>
+    
+      <li><a href="/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 4</a></li>
+    
+      <li><a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 3</a></li>
+    
+      <li><a href="/pulsar/2022/10/21/possible-high-level-architecture.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 1</a></li>
+    
+      <li><a href="/pulsar/2022/10/18/view-of-pulsar-metadata-store.html">A critical view of Pulsar's Metadata store abstraction</a></li>
+    
+      <li><a href="/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">Pulsar's namespace bundle centric architecture limits future options</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/pulsars-promise.html">Pulsar's high availability promise and its blind spot</a></li>
+    
+      <li><a href="/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html">How do you define high availability in your event driven system?</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/not-about-pulsar-3-0.html">Correction: This blog is not about Apache Pulsar 3.0</a></li>
+    
+      <li><a href="/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html">Possible worlds for Apache Pulsar 3.0 and making that actual</a></li>
+    
+    </ul>
+  </div>
+  <div id="disqus_thread"></div>
+  <script>
+    var disqus_config = function () {
+      this.page.url = 'https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html';
+      this.page.identifier = 'https://codingthestreams.com/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html';
+    };
+
+    (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = 'https://codingthestreams.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+    })();
+  </script>
+  <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a>
+</noscript>
+<a class="u-url" href="/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Coding the Streams - tech blog by Lari Hotari</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">Coding the Streams - tech blog by Lari Hotari</li>
+<li><a class="u-email" href="mailto:lhotari@apache.org">lhotari@apache.org</a></li>
+</ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+<ul class="social-media-list">
+<li><a href="https://github.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">lhotari</span></a></li>
+<li><a href="https://www.twitter.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">lhotari</span></a></li>
+</ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>

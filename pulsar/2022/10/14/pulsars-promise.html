@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Pulsar’s high availability promise and its blind spot | Coding the Streams - tech blog by Lari Hotari</title>
+<meta name="generator" content="Jekyll v3.9.2">
+<meta property="og:title" content="Pulsar’s high availability promise and its blind spot">
+<meta property="og:locale" content="en_US">
+<meta name="description" content="This blog post is a continuation of the previous blog post “How do you define high availability in your event driven system?”. It is rare that Pulsar is completely down, but there are cases where there are short downtime for topics, if downtime is defined in the form of acceptable end-to-end latency or error rate. This blog post explains more details about the blind spots.">
+<meta property="og:description" content="This blog post is a continuation of the previous blog post “How do you define high availability in your event driven system?”. It is rare that Pulsar is completely down, but there are cases where there are short downtime for topics, if downtime is defined in the form of acceptable end-to-end latency or error rate. This blog post explains more details about the blind spots.">
+<link rel="canonical" href="https://codingthestreams.com/pulsar/2022/10/14/pulsars-promise.html">
+<meta property="og:url" content="https://codingthestreams.com/pulsar/2022/10/14/pulsars-promise.html">
+<meta property="og:site_name" content="Coding the Streams - tech blog by Lari Hotari">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2022-10-14T13:18:00+00:00">
+<meta name="twitter:card" content="summary">
+<meta property="twitter:title" content="Pulsar’s high availability promise and its blind spot">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2022-10-14T13:18:00+00:00","datePublished":"2022-10-14T13:18:00+00:00","description":"This blog post is a continuation of the previous blog post “How do you define high availability in your event driven system?”. It is rare that Pulsar is completely down, but there are cases where there are short downtime for topics, if downtime is defined in the form of acceptable end-to-end latency or error rate. This blog post explains more details about the blind spots.","headline":"Pulsar’s high availability promise and its blind spot","mainEntityOfPage":{"@type":"WebPage","@id":"https://codingthestreams.com/pulsar/2022/10/14/pulsars-promise.html"},"url":"https://codingthestreams.com/pulsar/2022/10/14/pulsars-promise.html"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css">
+<link type="application/atom+xml" rel="alternate" href="https://codingthestreams.com/feed.xml" title="Coding the Streams - tech blog by Lari Hotari">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-71LP6Z9K0H"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-71LP6Z9K0H');
+</script>
+  
+
+
+</head>
+<body>
+<header class="site-header" role="banner">
+
+  <div class="wrapper">
+<a class="site-title" rel="author" href="/">Coding the Streams - tech blog by Lari Hotari</a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger">
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewbox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"></path>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+<a class="page-link" href="/about/">About</a><div class="categories-menu page-link">Categories
+<ul>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/pulsar">pulsar</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/eventdriven">eventdriven</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/til">til</a>
+    </li>
+  
+</ul>
+</div>
+<div class="categories-menu page-link">Tags
+<ul>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-ng">pulsar-ng</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/availability">availability</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-dev">pulsar-dev</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/slo">slo</a>
+      </li>
+    
+</ul>
+</div>
+
+        </div>
+      </nav>
+</div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Pulsar's high availability promise and its blind spot</h1>
+    <p class="post-meta"><time class="dt-published" datetime="2022-10-14T13:18:00+00:00" itemprop="datePublished">
+        Oct 14, 2022
+      </time></p>
+      Tags: <a href="/tag/pulsar-ng.html" rel="tag">pulsar-ng</a>, <a href="/tag/availability.html" rel="tag">availability</a>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <p>This blog post is a continuation of the previous blog post <a href="/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html">“How do you define high availability in your event driven system?”</a>. It is rare that Pulsar is completely down, but there are cases where there are short downtime for topics, if downtime is defined in the form of acceptable end-to-end latency or error rate. This blog post explains more details about the blind spots.</p>
+
+<h3 id="pulsars-promise">Pulsar’s promise</h3>
+
+<p>“Apache Pulsar is a highly available, distributed messaging system that provides guarantees of no message loss and strong message ordering with predictable read and write latency.”</p>
+
+<h3 id="pulsar-load-balancing">Pulsar load balancing</h3>
+
+<p>The Pulsar load balancing is described in the Pulsar manual <a href="https://pulsar.apache.org/docs/administration-load-balance">“Load balance across brokers”</a>. There’s also a very detailed blog post about Pulsar load balancing in <a href="https://streamnative.io/blog/engineering/2022-07-21-achieving-broker-load-balancing-with-apache-pulsar/">“Achieving Broker Load Balancing with Apache Pulsar”, by Heesung Sohn and Kai Wang</a>.</p>
+
+<p>The Pulsar manual describes the load balancing:</p>
+<blockquote>
+  <p>Topics are dynamically assigned to brokers based on the load conditions of all brokers in the cluster. The assignment of topics to brokers is not done at the topic level but at the bundle level (a higher level). Instead of individual topic assignments, each broker takes ownership of a subset of the topics for a namespace. This subset is called a bundle and effectively this subset is a sharding mechanism.</p>
+</blockquote>
+
+<p>A quick summary of how Pulsar load balancing works:</p>
+
+<ul>
+  <li>All topics belonging to the same “namespace bundle” are assigned to run on a specific broker.</li>
+  <li>A topic is mapped to a namespace bundle by calculating a hash and finding the bundle that matches the hash range where the calculated hash falls in.</li>
+  <li>The number of namespace bundles can change as a result of an operation called “bundle splitting”. That splits the bundle to 2 parts.</li>
+  <li>This assignment of a bundle is done centrally by the load manager on the leader broker. When a client creates a producer or a consumer to a topic, the topic is first looked up. If the topic isn’t part of an active namespace bundle, the bundle will get assigned to a broker by the load manager on the leader broker.</li>
+  <li>Each broker will report load metrics to the load manager by storing the reports in Zookeeper</li>
+  <li>If the load manager detects that a broker is overloaded or unbalanced with load (depends on load balancing configuration), it will take action. One action could be to split the namespace bundle in 2 parts and then move the other half of the namespace bundle to another broker. Another action could be to move the namespace bundle from the broker to another broker that has less load.</li>
+</ul>
+
+<h3 id="the-cause-of-micro-outages-in-pulsar-load-balancing-or-pulsar-graceful-shutdown">The cause of micro-outages in Pulsar load balancing or Pulsar graceful shutdown</h3>
+
+<p>In Pulsar there’s an operation called topic “unloading”. Unloading applies to namespace bundles in Pulsar load balancing. In that case, all topics belonging to the same namespace bundle are “unloaded” to reduce load on one broker that is overloaded or unbalanced. The namespace bundle will then be assigned to another broker with less load. A similar operation of unloading topics takes place when a broker is gracefully shutdown, for example for software version upgrade or when there are configuration changes that require a broker restart.</p>
+
+<p>Unloading a namespace bundle is a forceful operation without a special notification to the Pulsar client in the Pulsar binary protocol. From the client’s perspective, the broker closes producers and consumers without any special reason code. 
+(you can lookup <a href="https://github.com/apache/pulsar/blob/466bd894fe7dbf6ecf580f4bf6b6cd7dd5be89b4/pulsar-broker/src/main/java/org/apache/pulsar/broker/namespace/NamespaceService.java#L723-L742">NamespaceService.unloadNamespaceBundle</a> in the source code and drill down to details such as <a href="https://github.com/apache/pulsar/blob/15b33a3b7da7e4d839ccf21d2106e6cfdffc2145/pulsar-broker/src/main/java/org/apache/pulsar/broker/service/BrokerService.java#L2009-L2013">BrokerService.unloadServiceUnit</a> and <a href="https://github.com/apache/pulsar/blob/11482048d357ccb4e4f1802304a7dd0bfd7b9c26/pulsar-broker/src/main/java/org/apache/pulsar/broker/service/persistent/PersistentTopic.java#L1278-L1348">PersistentTopic.close</a>.)<br>
+The Pulsar client will attempt to reconnect consumers and producers immediately and backing off exponentially between retry attempts. The exponential backoff contains 10% jitter (<a href="https://github.com/apache/pulsar/blob/04aa9e8e51869d1621a7e25402a656084eebfc09/pulsar-client/src/main/java/org/apache/pulsar/client/impl/Backoff.java#L57-L85">implementation</a>).
+By default, the Pulsar client will start reconnecting after 100ms, 200ms, 400ms, 800ms, 1600ms, 3200ms, 6400ms, 12800ms…. After the initial step there will be up to -10% of random jitter.
+The total time spent after each attempt is about 100ms, 300ms, 700ms, 1500ms, 3100ms, 6300ms, 12700ms, 25500ms (-10% jitter). 
+In a heavily loaded system, the namespace bundle unloading takes some time to complete. All topic ledgers in the bundle will be closed before the ownership is released. During this time, all topics in the bundle won’t be able to produce or consume messages.
+Since the clients retry with backoff (to reduce the “herd effect”), it can result in disruption durations that are aligned with the values of total time spent after each attempt (100ms, 300ms, 700ms, 1500ms, 3100ms, 6300ms, 12700ms, 25500ms; -10% jitter).</p>
+
+<p>The unloading of a topic is forceful in a way that the producers are cut off immediately without explicitly completing storing messages that are in-flight. The existing solution seems to have many chances for race conditions. My assumption is that “topicFencingTimeoutSeconds” feature introduced by the pull request <a href="https://github.com/apache/pulsar/pull/8561">[broker] Close topics that remain fenced forcefully #8561</a> is needed to workaround some race conditions in the unloading solution. There are also other issue reports in this area such as <a href="https://github.com/apache/pulsar/issues/14941">Topic is temporarily unavailable #14941</a>
+, <a href="https://github.com/apache/pulsar/issues/5284">Persistent topic is always temporarily unavailable #5284</a> or <a href="https://github.com/apache/pulsar/issues/15451">Topic is already fenced #15451</a>.
+The forceful termination of consumers can cause message redelivery since the broker doesn’t wait for client to complete delivering in-flight acknowledgements. This isn’t a major problem for at-least-once messaging, but it could also be eliminated with a proper topic handover solution.</p>
+
+<h3 id="related-work">Related work</h3>
+
+<p>There’s <a href="https://github.com/apache/pulsar/issues/16691">PIP-192 New Pulsar Broker Load Balancer</a> in progress which contains an improvement to topic unloading by introducing a new operation “transfer” which will inform the client of the new broker. This requires changing the Pulsar protocol and the solution won’t help old clients.</p>
+
+<h4 id="unresolved-challenges-of-pip-192">Unresolved challenges of PIP-192?</h4>
+
+<p>The current <a href="https://github.com/apache/pulsar/issues/16691">PIP-192</a> design doesn’t seem to contain a plan to fix the various race conditions in unloading which are the actual root cause of the issues.</p>
+
+<p>In addition, when a high-volume topic with many consumers gets moved from one broker to another, it might cause the consumers to go into catch up read mode where the broker cache isn’t used and this will cause a spike in read requests to BookKeeper. This is another reason for additional latency.</p>
+
+<h3 id="key-takeaways">Key takeaways</h3>
+
+<ul>
+  <li>Pulsar’s load balancing solution relies on the client retrying to connect after a topic gets moved from an overloaded broker or at graceful shutdown from one broker to another.</li>
+  <li>The current solution doesn’t provide a transparent handover and will always introduce a short disruption of service for the topics that are moved.</li>
+  <li>The duration of the service disruption depends on the load, resources and cardinality of topics, producers and consumers.</li>
+  <li>The current plans in PIP-192 don’t cover addressing the root causes.</li>
+</ul>
+
+<p>A possible solution for this topic problem will be described in future blogs posts.</p>
+
+
+  </div>
+
+  
+  <div>
+    <h3>Related Posts</h3>
+    <ul>
+    
+      <li><a href="/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html">How do you define high availability in your event driven system?</a></li>
+    
+      <li><a href="/til/2022/11/02/how-complex-systems-fail.html">All your systems will become safety critical</a></li>
+    
+      <li><a href="/til/2022/10/25/til-distributed-consensus.html">TIL about Distributed Consensus and Systems design</a></li>
+    
+      <li><a href="/pulsar/2023/03/02/scalable-distributed-system-principles.html">Scalable distributed system principles in the context of redesigning Apache Pulsar's metadata solution</a></li>
+    
+      <li><a href="/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 4</a></li>
+    
+      <li><a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 3</a></li>
+    
+      <li><a href="/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 2</a></li>
+    
+      <li><a href="/pulsar/2022/10/21/possible-high-level-architecture.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 1</a></li>
+    
+      <li><a href="/pulsar/2022/10/18/view-of-pulsar-metadata-store.html">A critical view of Pulsar's Metadata store abstraction</a></li>
+    
+      <li><a href="/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">Pulsar's namespace bundle centric architecture limits future options</a></li>
+    
+    </ul>
+  </div>
+  <div id="disqus_thread"></div>
+  <script>
+    var disqus_config = function () {
+      this.page.url = 'https://codingthestreams.com/pulsar/2022/10/14/pulsars-promise.html';
+      this.page.identifier = 'https://codingthestreams.com/pulsar/2022/10/14/pulsars-promise.html';
+    };
+
+    (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = 'https://codingthestreams.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+    })();
+  </script>
+  <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a>
+</noscript>
+<a class="u-url" href="/pulsar/2022/10/14/pulsars-promise.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Coding the Streams - tech blog by Lari Hotari</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">Coding the Streams - tech blog by Lari Hotari</li>
+<li><a class="u-email" href="mailto:lhotari@apache.org">lhotari@apache.org</a></li>
+</ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+<ul class="social-media-list">
+<li><a href="https://github.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">lhotari</span></a></li>
+<li><a href="https://www.twitter.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">lhotari</span></a></li>
+</ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>

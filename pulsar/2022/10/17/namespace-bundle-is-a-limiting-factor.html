@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Pulsar’s namespace bundle centric architecture limits future options | Coding the Streams - tech blog by Lari Hotari</title>
+<meta name="generator" content="Jekyll v3.9.2">
+<meta property="og:title" content="Pulsar’s namespace bundle centric architecture limits future options">
+<meta property="og:locale" content="en_US">
+<meta name="description" content="This blog post is a continuation of the previous blog post “Pulsar’s high availability promise and its blind spot”, which explained Pulsar load balancing at a high level and one of the current challenges with Pulsar load balancing from the perspective of high availability.">
+<meta property="og:description" content="This blog post is a continuation of the previous blog post “Pulsar’s high availability promise and its blind spot”, which explained Pulsar load balancing at a high level and one of the current challenges with Pulsar load balancing from the perspective of high availability.">
+<link rel="canonical" href="https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">
+<meta property="og:url" content="https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">
+<meta property="og:site_name" content="Coding the Streams - tech blog by Lari Hotari">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2022-10-17T11:18:38+00:00">
+<meta name="twitter:card" content="summary">
+<meta property="twitter:title" content="Pulsar’s namespace bundle centric architecture limits future options">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2022-10-17T11:18:38+00:00","datePublished":"2022-10-17T11:18:38+00:00","description":"This blog post is a continuation of the previous blog post “Pulsar’s high availability promise and its blind spot”, which explained Pulsar load balancing at a high level and one of the current challenges with Pulsar load balancing from the perspective of high availability.","headline":"Pulsar’s namespace bundle centric architecture limits future options","mainEntityOfPage":{"@type":"WebPage","@id":"https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html"},"url":"https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css">
+<link type="application/atom+xml" rel="alternate" href="https://codingthestreams.com/feed.xml" title="Coding the Streams - tech blog by Lari Hotari">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-71LP6Z9K0H"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-71LP6Z9K0H');
+</script>
+  
+
+
+</head>
+<body>
+<header class="site-header" role="banner">
+
+  <div class="wrapper">
+<a class="site-title" rel="author" href="/">Coding the Streams - tech blog by Lari Hotari</a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger">
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewbox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"></path>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+<a class="page-link" href="/about/">About</a><div class="categories-menu page-link">Categories
+<ul>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/pulsar">pulsar</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/eventdriven">eventdriven</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/til">til</a>
+    </li>
+  
+</ul>
+</div>
+<div class="categories-menu page-link">Tags
+<ul>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-ng">pulsar-ng</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/availability">availability</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-dev">pulsar-dev</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/slo">slo</a>
+      </li>
+    
+</ul>
+</div>
+
+        </div>
+      </nav>
+</div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Pulsar's namespace bundle centric architecture limits future options</h1>
+    <p class="post-meta"><time class="dt-published" datetime="2022-10-17T11:18:38+00:00" itemprop="datePublished">
+        Oct 17, 2022
+      </time></p>
+      Tags: <a href="/tag/pulsar-ng.html" rel="tag">pulsar-ng</a>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <p>This blog post is a continuation of the previous blog post <a href="/pulsar/2022/10/14/pulsars-promise.html">“Pulsar’s high
+availability promise and its blind spot”</a>, which explained Pulsar load balancing at a high level and one of the
+current challenges with Pulsar load balancing from the perspective of high
+availability.</p>
+
+<h3 id="what-is-a-namespace-bundle">What is a “namespace bundle”</h3>
+
+<p>“Namespace bundles” are defined in the <a href="https://pulsar.apache.org/docs/administration-load-balance#dynamic-assignments">Pulsar reference
+documentation</a>
+in this way:</p>
+<blockquote>
+  <p>“The assignment of topics to brokers is not done at the topic level but at the
+bundle level (a higher level). Instead of individual topic assignments, each
+broker takes ownership of a subset of the topics for a namespace. This subset
+is called a bundle and effectively this subset is a sharding mechanism.”</p>
+</blockquote>
+
+<blockquote>
+  <p>“Topics are assigned to a particular bundle by taking the hash of the topic
+name and checking in which bundle the hash falls.”</p>
+</blockquote>
+
+<p>There has been a clear reason in the current design. With namespace bundles,
+topic load balancing operations can be handled as groups (batches) to minimize
+the overhead of coordination and load balancing operations.</p>
+
+<h3 id="implications-of-namespace-bundles-centric-design">Implications of namespace bundles centric design</h3>
+
+<p>However, this design also causes essential limitations: a topic cannot be freely
+assigned to a bundle or a broker. In the current namespace bundles design, a
+namespace bundle is determined by calculating a hash of the topic’s name and
+there are hash ranges to define bundle boundaries.</p>
+
+<p>There is no explicit way to assign a topic to a bundle. Splitting a bundle is
+the only way to impact bundle assignment. More choices are added to how the
+bundle split is determined. That is a sign of a design smell when the end users
+of the system have to start working around an internal implementation detail of
+the system.</p>
+
+<p>The current Pulsar load balancing makes load balancing decisions dynamically,
+although there are features where placement with predefined rules is used
+(broker isolation, anti-affinity namespaces across failure domains). The bundle
+centric design adds unnecessary complexity to load balancing decisions and
+prevents optimal topic placement.</p>
+
+<h3 id="alternative-approach-free-form-placement-of-topics-to-brokers">Alternative approach: free form placement of topics to brokers</h3>
+
+<p>Before introducing a replacement solution for namespace bundles in Apache
+Pulsar, let’s first examine the benefits of letting go of namespace bundle
+centric architecture.</p>
+
+<h4 id="free-form-placement-of-topics-provides-more-flexibility">Free form placement of topics provides more flexibility</h4>
+
+<p>There might be future requirements of having affinity and anti-affinity rules
+for topic placement. It might be useful to be able to have placement rules to
+take availability zones (or data center racks) into account.</p>
+
+<p>Free form topic placement would also be useful for capacity management. Rate
+limits could be used as part of load balancing decisions, and there could be
+rules for how much total possible throughput is allowed on a specific broker
+when considering the rate limits of assigned topics. Rule based placement could
+also be useful when it is known that the topic traffic pattern is bursty (common
+in batch oriented processing) and maximum throughput is desired while the
+traffic burst is being processed.</p>
+
+<p>Dynamic load balancing is simply too slow in reacting to such changes in traffic
+patterns. In these cases, it might be useful to be able to pre-assign the
+different partitions of a partitioned topic to be balanced across available
+brokers in the cluster with anti-affinity rules instead of making this decision
+dynamically after the traffic is running. The traffic burst could be over when
+the load balancer reacts.</p>
+
+<h4 id="advanced-form-of-broker-isolation-and-capacity-management">Advanced form of broker isolation and capacity management</h4>
+
+<p>Broker isolation is another use case for free form topic placement. In the case
+of capacity issues or noisy neighbor performance issues in achieving SLAs, it
+would be useful to be able to assign a specific topic to a dedicate set of
+brokers. Broker isolation is currently possible at namespace level, but having
+this possibility at topic level would increase flexibility</p>
+
+<p>On a multi-tenant SaaS platform, this would give more possibilities in meeting
+QoS/SLA by having better ways for ensuring guaranteed throughput and latency
+with better capacity management.</p>
+
+<p>Achieving autoscaling requires better capacity management. Unless there’s a way
+to run the existing capacity at a certain level and measure and control this,
+there aren’t ways to make relevant scale-out and scale-in decisions. These
+requirements could also be considered in Pulsar load balancing improvements.</p>
+
+<h4 id="enabling-a-seamless-handover-of-topic-from-one-broker-to-another">Enabling a seamless handover of topic from one broker to another</h4>
+
+<p>The <a href="/pulsar/2022/10/14/pulsars-promise.html">previous blog post</a> covered
+issues with unloading topics and how that causes short durations of
+unavailability to Pulsar producers and consumers.</p>
+
+<p>In a graceful broker shutdown, the namespace bundles that are owned by the
+broker are unloaded and released. There will be a short interruption in message
+delivery because of this operation. Similar interruptions happen when Pulsar
+load balancer decides to move a namespace bundle from one broker to another.</p>
+
+<p>The benefit of free form topic placement would be such that in a graceful broker
+shutdown or when load balancing decides to move topics, producers and consumers
+could be migrated from one broker to another in a seamless handover,
+independently of any “namespace bundle”. Each topic can start serving producers
+and consumers on the other broker immediately, unlike how it happens currently
+that all topics must be unloaded in the previous broker before topics can be
+served in the new location.</p>
+
+<p>This is the key to prevent downtime and service interruptions in graceful broker
+shutdown or Pulsar broker load balancing.</p>
+
+<h4 id="improving-availability-and-reliability-by-reducing-service-disruptions">Improving availability and reliability by reducing service disruptions</h4>
+
+<p>When it’s cheap and non-intrusive to migrate topics across brokers, Pulsar load
+balancing will become more effective.</p>
+
+<p>Effective Pulsar load balancing will help meet SLAs and the defined QoS levels
+in a cost-effective way. Effective load balancing will also make autoscaling an
+option without the risk of causing service interruptions or SLA violations.</p>
+
+<h3 id="redesigning-pulsar-architecture">Redesigning Pulsar architecture</h3>
+
+<p>The key change to make is to replace the namespace bundle centric design with a
+solution that allows free form placement of topics on brokers in flexible ways.
+This all must be efficient, performant, scalable, reliable and consistent. This
+is based on the assumption that the namespace bundle centric design is a
+limiting factor for Pulsar.</p>
+
+<p>Major changes in the Apache Pulsar project are proposed with Pulsar Improvement
+Proposals (PIPs).</p>
+
+<p>Before drafting a set of PIPs for replacing the namespace bundles, the approach
+going forward is to make a proof-of-concept change where there would be a
+significant improvement in Pulsar’s operations at production time and
+maintainability at development time. The PoC should demonstrate the value of
+making a change to the design. It will also be a validation of the assumption
+that the namespace bundle centric design is a limiting factor.</p>
+
+<p>Another key requirement for the new design is to be able to introduce a new type
+of protocol for handing over a topic between brokers with the goal of minimizing
+service disruptions. At high level this means, that the coordination should
+involve a state machine that handles this efficiently and in a consistent
+manner.</p>
+
+<p>There are also multiple other reasons why an architecture redesign is needed.
+Current Pulsar Admin APIs don’t handle large amounts of data: there is no
+pagination support. Making the Pulsar Admin APIs support pagination would
+trigger a lot of changes to the existing interfaces and solutions.</p>
+
+<h4 id="existing-pulsar-improvement-proposals-pips-related-to-this-area">Existing Pulsar Improvement Proposals (PIPs) related to this area</h4>
+
+<p>Implemented:</p>
+<ul>
+  <li><a href="https://github.com/apache/pulsar/wiki/PIP-45%3A-Pluggable-metadata-interface">PIP-45: Pluggable metadata
+interface</a></li>
+  <li><a href="https://github.com/apache/pulsar/wiki/PIP-39%3A-Namespace-Change-Events">PIP-39: Namespace Change
+Events</a></li>
+</ul>
+
+<p>In progress:</p>
+<ul>
+  <li><a href="https://github.com/apache/pulsar/issues/15254">PIP-157: Bucketing topic metadata to allow more topics per
+namespace</a></li>
+  <li><a href="https://github.com/apache/pulsar/issues/16691">PIP-192: New Pulsar Broker Load
+Balancer</a></li>
+  <li><a href="https://github.com/apache/pulsar/issues/16153">PIP-180: Shadow Topic, an alternative way to support readonly topic
+ownership</a></li>
+</ul>
+
+<p>The redesign would have to consider at least these areas where there are
+existing PIPs. The above PIPs show that metadata handling and Pulsar load
+balancing are very closely related topics in Pulsar and while reconsidering the
+architecture choices, they cannot be separated.</p>
+
+<p>For example, the design for “PIP-192: New Pulsar Broker Load Balancer”, would 
+be completely different if Pulsar didn’t have the namespace bundle centric design
+for Pulsar broker load balancing.</p>
+
+<h3 id="key-takeaways">Key takeaways</h3>
+
+<ul>
+  <li>
+    <p>The current design of namespace bundles is becoming a limitation for future
+Pulsar improvements.</p>
+  </li>
+  <li>
+    <p>The assumption is that if we replace “namespace bundles” in the Pulsar load
+balancing design, there will be a better way forward for Pulsar in the future.</p>
+  </li>
+  <li>
+    <p>Pulsar load balancing design depends on the Pulsar metadata solution. These
+two cannot be separated in a performant, reliable and cost-efficient solution.
+The Pulsar metadata solution will be greatly impacted by the removal of
+“namespace bundles”.</p>
+  </li>
+  <li>
+    <p>A proof-of-concept (PoC) solution will be built to validate the assumption and
+show the value of the redesigned Pulsar architecture.</p>
+  </li>
+</ul>
+
+<p>This blog post series will continue to chart the way forward. Please provide
+your feedback on the Pulsar dev mailing list or by commenting on this blog post.
+There will be upcoming blog posts about the high level solution architecture.
+I’m sure that many are doubting whether that could be solved at all and how it is
+solved. Stay tuned!</p>
+
+  </div>
+
+  
+  <div>
+    <h3>Related Posts</h3>
+    <ul>
+    
+      <li><a href="/pulsar/2023/03/02/scalable-distributed-system-principles.html">Scalable distributed system principles in the context of redesigning Apache Pulsar's metadata solution</a></li>
+    
+      <li><a href="/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 4</a></li>
+    
+      <li><a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 3</a></li>
+    
+      <li><a href="/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 2</a></li>
+    
+      <li><a href="/pulsar/2022/10/21/possible-high-level-architecture.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 1</a></li>
+    
+      <li><a href="/pulsar/2022/10/18/view-of-pulsar-metadata-store.html">A critical view of Pulsar's Metadata store abstraction</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/pulsars-promise.html">Pulsar's high availability promise and its blind spot</a></li>
+    
+      <li><a href="/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html">How do you define high availability in your event driven system?</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/not-about-pulsar-3-0.html">Correction: This blog is not about Apache Pulsar 3.0</a></li>
+    
+      <li><a href="/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html">Possible worlds for Apache Pulsar 3.0 and making that actual</a></li>
+    
+    </ul>
+  </div>
+  <div id="disqus_thread"></div>
+  <script>
+    var disqus_config = function () {
+      this.page.url = 'https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html';
+      this.page.identifier = 'https://codingthestreams.com/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html';
+    };
+
+    (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = 'https://codingthestreams.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+    })();
+  </script>
+  <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a>
+</noscript>
+<a class="u-url" href="/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Coding the Streams - tech blog by Lari Hotari</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">Coding the Streams - tech blog by Lari Hotari</li>
+<li><a class="u-email" href="mailto:lhotari@apache.org">lhotari@apache.org</a></li>
+</ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+<ul class="social-media-list">
+<li><a href="https://github.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">lhotari</span></a></li>
+<li><a href="https://www.twitter.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">lhotari</span></a></li>
+</ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>

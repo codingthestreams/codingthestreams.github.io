@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>All your systems will become safety critical | Coding the Streams - tech blog by Lari Hotari</title>
+<meta name="generator" content="Jekyll v3.9.2">
+<meta property="og:title" content="All your systems will become safety critical">
+<meta property="og:locale" content="en_US">
+<meta name="description" content="“All your systems will become safety critical” is what Richard I. Cook says in his presentation “Resilience In Complex Adaptive Systems” at 2:28, “The future is safety”. This is why it’s important to learn about resilience engineering.">
+<meta property="og:description" content="“All your systems will become safety critical” is what Richard I. Cook says in his presentation “Resilience In Complex Adaptive Systems” at 2:28, “The future is safety”. This is why it’s important to learn about resilience engineering.">
+<link rel="canonical" href="https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail.html">
+<meta property="og:url" content="https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail.html">
+<meta property="og:site_name" content="Coding the Streams - tech blog by Lari Hotari">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2022-11-02T09:45:48+00:00">
+<meta name="twitter:card" content="summary">
+<meta property="twitter:title" content="All your systems will become safety critical">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2022-11-02T09:45:48+00:00","datePublished":"2022-11-02T09:45:48+00:00","description":"“All your systems will become safety critical” is what Richard I. Cook says in his presentation “Resilience In Complex Adaptive Systems” at 2:28, “The future is safety”. This is why it’s important to learn about resilience engineering.","headline":"All your systems will become safety critical","mainEntityOfPage":{"@type":"WebPage","@id":"https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail.html"},"url":"https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail.html"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css">
+<link type="application/atom+xml" rel="alternate" href="https://codingthestreams.com/feed.xml" title="Coding the Streams - tech blog by Lari Hotari">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-71LP6Z9K0H"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-71LP6Z9K0H');
+</script>
+  
+
+
+</head>
+<body>
+<header class="site-header" role="banner">
+
+  <div class="wrapper">
+<a class="site-title" rel="author" href="/">Coding the Streams - tech blog by Lari Hotari</a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger">
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewbox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"></path>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+<a class="page-link" href="/about/">About</a><div class="categories-menu page-link">Categories
+<ul>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/pulsar">pulsar</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/eventdriven">eventdriven</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/til">til</a>
+    </li>
+  
+</ul>
+</div>
+<div class="categories-menu page-link">Tags
+<ul>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-ng">pulsar-ng</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/availability">availability</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-dev">pulsar-dev</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/slo">slo</a>
+      </li>
+    
+</ul>
+</div>
+
+        </div>
+      </nav>
+</div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">All your systems will become safety critical</h1>
+    <p class="post-meta"><time class="dt-published" datetime="2022-11-02T09:45:48+00:00" itemprop="datePublished">
+        Nov 2, 2022
+      </time></p>
+      Tags: <a href="/tag/availability.html" rel="tag">availability</a>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <p>“All your systems will become safety critical” is what Richard I. Cook says in his presentation <a href="https://www.youtube.com/watch?v=PGLYEDpNu60&t=2m4s">“Resilience In Complex Adaptive Systems” at 2:28, “The future is safety”</a>. This is why it’s important to learn about resilience engineering.</p>
+
+<p>One of the best resources on the topic is to read about the work by Richard I. Cook.</p>
+
+<p><a href="https://biologicalsciences.uchicago.edu/news/features/richard-cook-obituary">Dr. Richard I. Cook (1953 – August 31, 2022)</a> was a system safety researcher, physician, anesthesiologist, university professor, and software engineer. Cook did research in safety, incident analysis, cognitive systems engineering, and resilience engineering across a number of fields, including critical care medicine, aviation, air traffic control, space operations, semiconductor manufacturing, and software services.
+Richard I. Cook passed away on August 31, 2022. RIP.</p>
+
+<h3 id="resources-about-how-complex-systems-fail">Resources about “How Complex Systems Fail”</h3>
+
+<ul>
+  <li>
+    <p>Wikipedia page <a href="https://en.wikipedia.org/wiki/Richard_Cook_(safety_researcher)">“Richard Cook (safety researcher)”</a></p>
+  </li>
+  <li>
+<a href="https://www.adaptivecapacitylabs.com/HowComplexSystemsFail.pdf">Article “How Complex Systems Fail”</a>
+    <ul>
+      <li><a href="https://blog.acolyer.org/2016/02/10/how-complex-systems-fail/">“the morning paper” commentary about this paper.</a></li>
+    </ul>
+  </li>
+  <li>
+    <p><a href="https://www.youtube.com/watch?v=2S0k12uZR14">Velocity 2012: Richard Cook, “How Complex Systems Fail” - YouTube</a></p>
+  </li>
+  <li>
+    <p><a href="https://www.youtube.com/watch?v=PGLYEDpNu60">Velocity 2013: Richard Cook, “Resilience In Complex Adaptive Systems” - YouTube</a></p>
+  </li>
+  <li><a href="https://www.oreilly.com/content/situation-normal-all-fouled-up/">Velocity conf 2016 keynote: Situation normal: All fouled up</a></li>
+</ul>
+
+<h3 id="resources-about-applying-how-complex-systems-fail-to-devops">Resources about applying “How Complex Systems Fail” to DevOps</h3>
+
+<ul>
+  <li>John Allspaw blog posts:
+    <ul>
+      <li><a href="https://www.kitchensoap.com/2009/11/12/how-complex-systems-fail-a-webops-perspective/">2009-11-12 How Complex Systems Fail: A WebOps Perspective</a></li>
+      <li><a href="https://www.kitchensoap.com/2011/04/07/resilience-engineering-part-i/">2011-04-07 Resilience Engineering: Part I</a></li>
+      <li><a href="https://www.kitchensoap.com/2012/06/18/resilience-engineering-part-ii-lenses/">2012-06-18 Resilience Engineering: Pair II: Lenses</a></li>
+    </ul>
+  </li>
+  <li><a href="https://www.youtube.com/watch?v=gy2lTFD4560">Velocity Europe, John Allspaw, “Anticipation: What Could Possibly Go Wrong?”</a></li>
+</ul>
+
+<h3 id="more-resources-about-resilience-engineering">More resources about Resilience engineering</h3>
+
+<ul>
+  <li>
+<a href="https://github.com/lorin/resilience-engineering">Resilience engineering papers</a>
+    <ul>
+      <li><a href="https://github.com/lorin/resilience-engineering/blob/master/intro.md">Resilience engineering: Where do I start?</a></li>
+    </ul>
+  </li>
+  <li><a href="https://awesome-safety-critical.readthedocs.io/en/latest/index.html">Awesome Safety Critical</a></li>
+</ul>
+
+<h3 id="applying-how-complex-systems-fail-to-rearchitecting-apache-pulsar">Applying “How Complex Systems Fail” to rearchitecting Apache Pulsar</h3>
+
+<p>This is something that I’m working on. The design presented in <a href="/pulsar/2022/10/21/possible-high-level-architecture.html">“Rearchitecting Apache Pulsar to handle 100 million topics, Part 1”</a> and <a href="/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">“Rearchitecting Apache Pulsar to handle 100 million topics, Part 2”</a> already contain many elements that are influenced by the principles of resilience engineering. Continuing to improve in this area is one of my goals.</p>
+
+<p>One of the main motivations for me in applying resilience engineering to Apache Pulsar is that I believe what Richard Cook explains in the presentation <a href="https://www.youtube.com/watch?v=PGLYEDpNu60&t=2m4s">“Resilience In Complex Adaptive Systems” at 2:28, “The future is safety”</a>. Richard Cook makes the claim that all systems will become safety critical systems.</p>
+
+<p>A system like “Apache Pulsar” is critical infrastructure that many other systems rely on. Let’s say that “Apache Pulsar” is used as the communications backbone for an IoT system. In IoT, there are use cases where IoT systems are used for implementing panic button backends, for example used by elderly people. If the backend system is not available when the panic button is pressed in an emergency, that could be a life critical outage. Many IoT systems have already become safety critical systems. In my opinion, relying on “Apache Pulsar” alone for messaging in critical systems is not sufficient preparation and design. For example, the blog post <a href="/pulsar/2022/10/14/pulsars-promise.html">“Pulsar’s high availability promise and its blind spot”</a> explains some details about the high availability promise.</p>
+
+<p>Building safety critical systems that rely on messaging would require much more focus on resilience and reliability patterns for ensuring end-to-end service. It is not sufficient to rely on Apache Pulsar for messaging alone. However, since all systems will become safety critical systems in the future, how do we improve Apache Pulsar in this area?</p>
+
+<p>The mistake in building safety critical systems is to trust any intermediate component between endpoints. This is a true dilemma with message brokers such as Apache Pulsar. This takes us to another topic which is the <a href="https://en.wikipedia.org/wiki/End-to-end_principle">“End-to-end principle”</a>. You can read more about that <a href="https://blog.acolyer.org/2014/11/14/end-to-end-arguments-in-system-design/">in the commentary of “End-to-End Arguments in System Design” by “the morning paper”</a>. 
+To be continued in another blog post in the future.</p>
+
+
+  </div>
+
+  
+  <div>
+    <h3>Related Posts</h3>
+    <ul>
+    
+      <li><a href="/til/2022/10/25/til-distributed-consensus.html">TIL about Distributed Consensus and Systems design</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/pulsars-promise.html">Pulsar's high availability promise and its blind spot</a></li>
+    
+      <li><a href="/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html">How do you define high availability in your event driven system?</a></li>
+    
+    </ul>
+  </div>
+  <div id="disqus_thread"></div>
+  <script>
+    var disqus_config = function () {
+      this.page.url = 'https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail.html';
+      this.page.identifier = 'https://codingthestreams.com/til/2022/11/02/how-complex-systems-fail.html';
+    };
+
+    (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = 'https://codingthestreams.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+    })();
+  </script>
+  <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a>
+</noscript>
+<a class="u-url" href="/til/2022/11/02/how-complex-systems-fail.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Coding the Streams - tech blog by Lari Hotari</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">Coding the Streams - tech blog by Lari Hotari</li>
+<li><a class="u-email" href="mailto:lhotari@apache.org">lhotari@apache.org</a></li>
+</ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+<ul class="social-media-list">
+<li><a href="https://github.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">lhotari</span></a></li>
+<li><a href="https://www.twitter.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">lhotari</span></a></li>
+</ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>

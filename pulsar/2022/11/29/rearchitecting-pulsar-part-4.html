@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Rearchitecting Apache Pulsar to handle 100 million topics, Part 4 | Coding the Streams - tech blog by Lari Hotari</title>
+<meta name="generator" content="Jekyll v3.9.2">
+<meta property="og:title" content="Rearchitecting Apache Pulsar to handle 100 million topics, Part 4">
+<meta property="og:locale" content="en_US">
+<meta name="description" content="Context">
+<meta property="og:description" content="Context">
+<link rel="canonical" href="https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">
+<meta property="og:url" content="https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html">
+<meta property="og:site_name" content="Coding the Streams - tech blog by Lari Hotari">
+<meta property="og:type" content="article">
+<meta property="article:published_time" content="2022-11-29T07:52:13+00:00">
+<meta name="twitter:card" content="summary">
+<meta property="twitter:title" content="Rearchitecting Apache Pulsar to handle 100 million topics, Part 4">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2022-11-29T07:52:13+00:00","datePublished":"2022-11-29T07:52:13+00:00","description":"Context","headline":"Rearchitecting Apache Pulsar to handle 100 million topics, Part 4","mainEntityOfPage":{"@type":"WebPage","@id":"https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html"},"url":"https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html"}</script>
+<!-- End Jekyll SEO tag -->
+<link rel="stylesheet" href="/assets/main.css">
+<link type="application/atom+xml" rel="alternate" href="https://codingthestreams.com/feed.xml" title="Coding the Streams - tech blog by Lari Hotari">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-71LP6Z9K0H"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-71LP6Z9K0H');
+</script>
+  
+
+<link rel="stylesheet" href="/assets/css/lightbox.min.css">
+<style>
+.lb-image, .lb-dataContainer {
+  width: 90% !important;
+  max-width: 90%;
+  height: auto !important;
+}
+.lb-outerContainer {
+  width: 90% !important;
+  max-width: 90% !important;
+  height: 90% !important;
+  max-height: 90% !important;
+}    
+</style>
+<script src="/assets/js/lightbox-plus-jquery.min.js"></script>
+<script>
+$(function() {
+$('img.mermaid').each(function() {
+    $(this).wrap('<a href="' + $(this).attr('src') + '" data-lightbox="mermaid" />');
+});
+});
+lightbox.option({'fitImagesInViewport': false});
+</script>
+
+</head>
+<body>
+<header class="site-header" role="banner">
+
+  <div class="wrapper">
+<a class="site-title" rel="author" href="/">Coding the Streams - tech blog by Lari Hotari</a><nav class="site-nav">
+        <input type="checkbox" id="nav-trigger" class="nav-trigger">
+        <label for="nav-trigger">
+          <span class="menu-icon">
+            <svg viewbox="0 0 18 15" width="18px" height="15px">
+              <path d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"></path>
+            </svg>
+          </span>
+        </label>
+
+        <div class="trigger">
+<a class="page-link" href="/about/">About</a><div class="categories-menu page-link">Categories
+<ul>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/pulsar">pulsar</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/eventdriven">eventdriven</a>
+    </li>
+  
+    <li>
+      <a href="https://codingthestreams.com/category/til">til</a>
+    </li>
+  
+</ul>
+</div>
+<div class="categories-menu page-link">Tags
+<ul>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-ng">pulsar-ng</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/availability">availability</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/pulsar-dev">pulsar-dev</a>
+      </li>
+    
+      <li>
+        <a href="https://codingthestreams.com/tag/slo">slo</a>
+      </li>
+    
+</ul>
+</div>
+
+        </div>
+      </nav>
+</div>
+</header>
+<main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        <article class="post h-entry" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Rearchitecting Apache Pulsar to handle 100 million topics, Part 4</h1>
+    <p class="post-meta"><time class="dt-published" datetime="2022-11-29T07:52:13+00:00" itemprop="datePublished">
+        Nov 29, 2022
+      </time></p>
+      Tags: <a href="/tag/pulsar-ng.html" rel="tag">pulsar-ng</a>
+  </header>
+
+  <div class="post-content e-content" itemprop="articleBody">
+    <ul id="toc" class="section-nav">
+<li class="toc-entry toc-h2"><a href="#context">Context</a></li>
+<li class="toc-entry toc-h2">
+<a href="#project-apache-pulsar-nextgen">Project “Apache Pulsar NextGen”</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#summary-of-goals">Summary of goals</a></li>
+<li class="toc-entry toc-h3"><a href="#the-way-forward">The way forward</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h2">
+<a href="#topic-lookup-and-assignment-flow---components-and-interaction">Topic lookup and assignment flow - components and interaction</a>
+<ul>
+<li class="toc-entry toc-h3"><a href="#components-participating-in-the-topic-lookup-and-assignment-flow">Components participating in the topic lookup and assignment flow</a></li>
+<li class="toc-entry toc-h3"><a href="#component-communications">Component communications</a></li>
+</ul>
+</li>
+<li class="toc-entry toc-h2"><a href="#summary">Summary</a></li>
+</ul>
+<h2 id="context">
+<a class="anchor" href="#context" aria-hidden="true"><span class="octicon octicon-link"></span></a>Context</h2>
+
+<p>Welcome to continue to read about the possible design for rearchitecting Apache Pulsar to handle 100 million topics.</p>
+
+<p>The <a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html">previous blog post explains the context</a>.</p>
+
+<h2 id="project-apache-pulsar-nextgen">
+<a class="anchor" href="#project-apache-pulsar-nextgen" aria-hidden="true"><span class="octicon octicon-link"></span></a>Project “Apache Pulsar NextGen”</h2>
+
+<p>Rearchitecting Apache Pulsar to handle 100 million topics is one of the goals of the next generation architecture for Apache Pulsar. 
+This architecture is unofficial and it hasn’t been approved or decided by the Apache Pulsar project. 
+Before the project can decide, it is necessary to demonstrate that the suggested changes in the architecture are meaningful and address the problems that have become limiting factors for the future development of Apache Pulsar.</p>
+
+<h3 id="summary-of-goals">
+<a class="anchor" href="#summary-of-goals" aria-hidden="true"><span class="octicon octicon-link"></span></a>Summary of goals</h3>
+
+<ul>
+  <li>introduce a <a href="/pulsar/2022/10/21/possible-high-level-architecture.html">high level architecture with a sharding model</a> that scales from 1 to 100 million topics and beyond.</li>
+  <li>address the micro-outages issue with Pulsar topics. This was explained in the blog post <a href="/pulsar/2022/10/14/pulsars-promise.html">“Pulsar’s high availability promise and its blind spot”</a>.</li>
+  <li>provide a solid foundation for Pulsar future development by getting rid of the current <a href="/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">namespace bundle centric design</a> which causes unnecessary limitations and complexity to any improvements in Pulsar load balancing.</li>
+</ul>
+
+<h3 id="the-way-forward">
+<a class="anchor" href="#the-way-forward" aria-hidden="true"><span class="octicon octicon-link"></span></a>The way forward</h3>
+
+<p><a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html#next-experiments--milestones-on-the-way-toward">The previous blog post explained the next milestone</a>, the minimal implementation to integrate the new metadata layer to Pulsar.
+This blog post will continue with the detailed design that is necessary to get the implementation going.</p>
+
+<h2 id="topic-lookup-and-assignment-flow---components-and-interaction">
+<a class="anchor" href="#topic-lookup-and-assignment-flow---components-and-interaction" aria-hidden="true"><span class="octicon octicon-link"></span></a>Topic lookup and assignment flow - components and interaction</h2>
+
+<p>The plan for the first steps in the implementation is to restore pulsar-discovery-service (<a href="https://github.com/codingthestreams/pulsar/commits/develop">already in progress in develop branch</a>) and then start modifying the solution where we migrate towards the new architecture.</p>
+
+<p>As explained <a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html#next-experiments--milestones-on-the-way-toward">in the previous blog post</a>, a Pulsar client will connect to the discovery service for lookup.</p>
+
+<p><img src="https://pulsar.apache.org/assets/images/binary-protocol-topic-lookup-f013216a8dae04823eb9d39a0f2e264e.png" alt="Topic lookup"></p>
+
+<p>This is a point where we will start the “walking skeleton” by keeping the solution “working” at least for the “happy path” of Pulsar consumers and producers.
+In the new architecture, the topic lookup will trigger the topic assignment. That is the reason why it’s useful to call the end-to-end flow as “topic lookup and assignment flow”.</p>
+
+<h3 id="components-participating-in-the-topic-lookup-and-assignment-flow">
+<a class="anchor" href="#components-participating-in-the-topic-lookup-and-assignment-flow" aria-hidden="true"><span class="octicon octicon-link"></span></a>Components participating in the topic lookup and assignment flow</h3>
+
+<p>There was a draft listing of possible components <a href="/pulsar/2022/10/21/possible-high-level-architecture.html#storage-model-events-are-the-source-of-truth">in one of the previous blog posts</a>:</p>
+<ul>
+  <li>topic shard inventory</li>
+  <li>tenant shard inventory</li>
+  <li>namespace shard inventory</li>
+  <li>topic controller</li>
+  <li>cluster load manager</li>
+  <li>broker load manager</li>
+</ul>
+
+<p>This could be a starting point for describing the components and the roles.</p>
+
+<p><img class="mermaid" src="https://mermaid.ink/svg/eyJjb2RlIjoiJSV7aW5pdDogeyd0aGVtZSc6ICduZXV0cmFsJ319JSVcbnNlcXVlbmNlRGlhZ3JhbVxuYXV0b251bWJlclxucGFydGljaXBhbnQgUEMgYXMgUHVsc2FyIGNsaWVudFxucGFydGljaXBhbnQgRFMgYXMgRGlzY292ZXIgc2VydmljZVxucGFydGljaXBhbnQgVEMgYXMgVG9waWMgY29udHJvbGxlcjxici8-KHNoYXJkZWQpXG5wYXJ0aWNpcGFudCBDTSBhcyBDbHVzdGVyIG1hbmFnZXJcbnBhcnRpY2lwYW50IEJNIGFzIEJyb2tlciBtYW5hZ2VyPGJyLz4oc2hhcmRlZClcbnBhcnRpY2lwYW50IEIgYXMgQnJva2VyXG5wYXJ0aWNpcGFudCBUTkkgYXMgVGVuYW50IGludmVudG9yeTxici8-KHNoYXJkZWQpXG5wYXJ0aWNpcGFudCBOSSBhcyBOYW1lc3BhY2UgaW52ZW50b3J5PGJyLz4oc2hhcmRlZClcbnBhcnRpY2lwYW50IFRJIGFzIFRvcGljIGludmVudG9yeTxici8-KHNoYXJkZWQpXG5CLSlCTTogRXN0YWJsaXNoIHNlc3Npb25cbkJNLSlCOiBTZXNzaW9uIGlkXG5sb29wXG5CLSlCTTogSGVhcnRiZWF0XG5CLSlCTTogTG9hZCByZXBvcnRcbmVuZFxuVEMtPj4rQ006IExlYXNlIGNhcGFjaXR5IHVuaXRzIGZvciBhc3NpZ25tZW50c1xuQ00tPj4rQk06IExlYXNlIGNhcGFjaXR5IHVuaXRzIGZvciBhc3NpZ25tZW50c1xuQk0tPj4tQ006IENhcGFjaXR5IHVuaXRzIGxlYXNlXG5DTS0-Pi1UQzogQ2FwYWNpdHkgdW5pdHMgbGVhc2VcblBDLT4-K0RTOiBMb29rdXAgdG9waWNcbkRTLT4-K1RDOiBMb29rdXAgdG9waWNcblRDLT4-K0JNOiBBc3NpZ24gdG9waWNcbkJNLT4-LVRDOiBUb3BpYyBhc3NpZ25tZW50IHJlY2VpdmVkIChwb3NpdGlvbilcbkJNLSlUTkk6IFN1YnNjcmliZSB0ZW5hbnQgbWV0YWRhdGEgJiBwb2xpY3lcbkJNLSlOSTogU3Vic2NyaWJlIG5hbWVzcGFjZSBtZXRhZGF0YSAmIHBvbGljeVxuQk0tKVRJOiBTdWJzY3JpYmUgdG9waWMgbWV0YWRhdGEgJiBwb2xpY3lcblROSS0pQk06IFRlbmFudCBtZXRhZGF0YSAmIHBvbGljeVxuTkktKUJNOiBOYW1lc3BhY2UgbWV0YWRhdGEgJiBwb2xpY3lcblRJLSlCTTogVG9waWMgbWV0YWRhdGEgJiBwb2xpY3lcbkJNLT4-QjogQXNzaWduIHRvcGljIChpbmNsdWRlcyB0ZW5hbnQsIG5zLCB0b3BpYyBtZXRhZGF0YSlcbk5vdGUgb3ZlciBCTSxCOiBCcm9rZXIgbWFuYWdlciBrZWVwcyB0cmFjayBvZiBtZXRhZGF0YSAmIHBvbGljeSBkYXRhPGJyLz50aGF0IGhhcyBiZWVuIHNlbnQgdG8gdGhlIGJyb2tlciBkdXJpbmcgdGhlIHNlc3Npb24uPGJyLz5UaGUgYnJva2VyIGlzIGV4cGVjdGVkIHRvIGNhY2hlIGFsbCBtZXRhZGF0YS5cbkItKUJNOiBVcGRhdGUgc3luYyBwb3NpdGlvblxuQk0tKVRDOiBTeW5jIHBvc2l0aW9uIGZvciBicm9rZXJcblRDLT4-LURTOiBMb29rdXAgdG9waWMgcmVzcG9uc2VcbkRTLT4-LVBDOiBMb29rdXAgdG9waWMgcmVzcG9uc2UiLCJtZXJtYWlkIjp7InRoZW1lIjoibmV1dHJhbCJ9fQ"></p>
+
+<h3 id="component-communications">
+<a class="anchor" href="#component-communications" aria-hidden="true"><span class="octicon octicon-link"></span></a>Component communications</h3>
+
+<p>In the architecture, there’s a need for communication from each sharded component to components of other shards.
+The initial plan is to use either gRPC or <a href="https://rsocket.io/">RSocket protocol</a> for implementing this communication.</p>
+
+<p>The discovery of other shards is via the “cluster manager” component. That provides services for service discovery.</p>
+
+<p>The current assumption is that each shard is forms a Raft group and all components are sharded across these shards.
+The cluster manager would form it’s own separate Raft group.</p>
+
+<p>Whenever the leader of the shard gets assigned, it will connect to the cluster manager and update the leader’s endpoint address.
+All nodes of all shards will keep a connection to the cluster manager and get informed of the shard leader changes.</p>
+
+<p><img class="mermaid" src="https://mermaid.ink/svg/eyJjb2RlIjoiJSV7aW5pdDogeyd0aGVtZSc6ICduZXV0cmFsJ319JSVcbnNlcXVlbmNlRGlhZ3JhbVxuYXV0b251bWJlclxucGFydGljaXBhbnQgQ00gYXMgQ2x1c3RlciBtYW5hZ2VyJ3M8YnIvPk1lbWJlcnNoaXAgbWFuYWdlclxucGFydGljaXBhbnQgU0wgYXMgU2hhcmQgTGVhZGVyJ3M8YnIvPk1lbWJlcnNoaXAgbWFuYWdlclxucGFydGljaXBhbnQgU0YgYXMgU2hhcmQgRm9sbG93ZXI8YnIvPk1lbWJlcnNoaXAgbWFuYWdlclxuU0wtKUNNOiBSZWdpc3RlciBzaGFyZCBsZWFkZXI8YnIvPmFuZCBjb25uZWN0IGZvciB1cGRhdGVzXG5Mb29wXG5DTS0pU0w6IFVwZGF0ZSBzaGFyZCBsZWFkZXIgZW5kIHBvaW50XG5lbmRcblNGLSlDTTogQ29ubmVjdCBzaGFyZCBmb2xsb3dlciBmb3IgdXBkYXRlc1xuTG9vcFxuQ00tKVNGOiBVcGRhdGUgc2hhcmQgbGVhZGVyIGVuZCBwb2ludFxuZW5kIiwibWVybWFpZCI6eyJ0aGVtZSI6Im5ldXRyYWwifX0"></p>
+
+<p>The endpoint that is registered is a gRPC or a RSocket endpoint address. 
+There will be a way to send messages to a sub-component that is contained in the shard. Each shard is expected to be uniform and consistent hashing is used to locate a specific key. This key will be the tenant name, namespace name or topic name in the case of tenant inventory, namespace inventory or topic inventory components. The topic name is also the key for the topic controller.</p>
+
+<h2 id="summary">
+<a class="anchor" href="#summary" aria-hidden="true"><span class="octicon octicon-link"></span></a>Summary</h2>
+
+<p>This blog post describes the components and interactions participating in the topic lookup and assignment flow.<br>
+There are a lot of small details that will need to be addressed on the way to implementing this solution. 
+Each sub-component interaction procotol will be specified in detail after there’s some feedback from proof-of-concept implementation that is ongoing.</p>
+
+  </div>
+
+  
+  <div>
+    <h3>Related Posts</h3>
+    <ul>
+    
+      <li><a href="/pulsar/2023/03/02/scalable-distributed-system-principles.html">Scalable distributed system principles in the context of redesigning Apache Pulsar's metadata solution</a></li>
+    
+      <li><a href="/pulsar/2022/11/28/rearchitecting-pulsar-part-3.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 3</a></li>
+    
+      <li><a href="/pulsar/2022/10/24/rearchitecting-pulsar-part-2.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 2</a></li>
+    
+      <li><a href="/pulsar/2022/10/21/possible-high-level-architecture.html">Rearchitecting Apache Pulsar to handle 100 million topics, Part 1</a></li>
+    
+      <li><a href="/pulsar/2022/10/18/view-of-pulsar-metadata-store.html">A critical view of Pulsar's Metadata store abstraction</a></li>
+    
+      <li><a href="/pulsar/2022/10/17/namespace-bundle-is-a-limiting-factor.html">Pulsar's namespace bundle centric architecture limits future options</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/pulsars-promise.html">Pulsar's high availability promise and its blind spot</a></li>
+    
+      <li><a href="/pulsar/eventdriven/2022/10/14/high-availability-for-event-driven-systems.html">How do you define high availability in your event driven system?</a></li>
+    
+      <li><a href="/pulsar/2022/10/14/not-about-pulsar-3-0.html">Correction: This blog is not about Apache Pulsar 3.0</a></li>
+    
+      <li><a href="/pulsar/2022/10/13/possible-worlds-for-apache-pulsar.html">Possible worlds for Apache Pulsar 3.0 and making that actual</a></li>
+    
+    </ul>
+  </div>
+  <div id="disqus_thread"></div>
+  <script>
+    var disqus_config = function () {
+      this.page.url = 'https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html';
+      this.page.identifier = 'https://codingthestreams.com/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html';
+    };
+
+    (function() {
+      var d = document, s = d.createElement('script');
+
+      s.src = 'https://codingthestreams.disqus.com/embed.js';
+
+      s.setAttribute('data-timestamp', +new Date());
+      (d.head || d.body).appendChild(s);
+    })();
+  </script>
+  <noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript" rel="nofollow">comments powered by Disqus.</a>
+</noscript>
+<a class="u-url" href="/pulsar/2022/11/29/rearchitecting-pulsar-part-4.html" hidden></a>
+</article>
+
+      </div>
+    </main><footer class="site-footer h-card">
+  <data class="u-url" href="/"></data>
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">Coding the Streams - tech blog by Lari Hotari</h2>
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <li class="p-name">Coding the Streams - tech blog by Lari Hotari</li>
+<li><a class="u-email" href="mailto:lhotari@apache.org">lhotari@apache.org</a></li>
+</ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+<ul class="social-media-list">
+<li><a href="https://github.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#github"></use></svg> <span class="username">lhotari</span></a></li>
+<li><a href="https://www.twitter.com/lhotari"><svg class="svg-icon"><use xlink:href="/assets/minima-social-icons.svg#twitter"></use></svg> <span class="username">lhotari</span></a></li>
+</ul>
+</div>
+
+      <div class="footer-col footer-col-3">
+        <p>Blogs and experiments about event streaming by Lari Hotari and guest authors.  The opinions are my own and do not represent the views of my employer or Apache Software Foundation (ASF) or Apache Pulsar PMC.</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+</body>
+
+</html>
